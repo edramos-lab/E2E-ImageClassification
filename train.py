@@ -227,14 +227,17 @@ def main():
     
     # Initialize wandb
     wandb.init(project=args.project_name)
-    # Log dataset directory
-    wandb.log({"dataset_dir": args.dataset_dir})
-    wandb.log({"model": args.model})
-    wandb.log({"batch_size": args.batch})
-    wandb.log({"learning_rate": args.lr})
-    wandb.log({"epochs": args.epochs})
-    wandb.log({"dataset_ratio": args.dataset_ratio})
-    wandb.log({"k_folds": args.k_folds})
+    
+    # Log configuration parameters
+    wandb.log({
+        "dataset_dir": args.dataset_dir,
+        "model": args.model,
+        "batch_size": args.batch,
+        "learning_rate": args.lr,
+        "epochs": args.epochs,
+        "dataset_ratio": args.dataset_ratio,
+        "k_folds": args.k_folds
+    })
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -273,6 +276,9 @@ def main():
     for fold, (train_ids, val_ids) in enumerate(kfold.split(train_dataset)):
         print(f'FOLD {fold + 1}')
         print('--------------------------------')
+        
+        # Initialize wandb for this fold
+        wandb.init(project=args.project_name, name=f"fold_{fold + 1}")
         
         # Create data loaders for this fold
         train_subsampler = torch.utils.data.SubsetRandomSampler(train_ids)
@@ -481,6 +487,7 @@ def main():
                 grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                 show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
         
+        # Finish wandb run for this fold
         wandb.finish()
 
 if __name__ == '__main__':
