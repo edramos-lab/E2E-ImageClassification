@@ -30,41 +30,42 @@ def parse_args():
     
     return parser.parse_args()
 
+def get_class_names(dataset_dir):
+    """
+    Get class names from the dataset directory structure
+    Args:
+        dataset_dir: Path to the dataset directory
+    Returns:
+        class_names: List of class names
+    """
+    # Get the training directory
+    train_dir = os.path.join(dataset_dir, 'Training')
+    
+    # Get all subdirectories (class folders)
+    class_names = [d for d in os.listdir(train_dir) 
+                  if os.path.isdir(os.path.join(train_dir, d))]
+    
+    # Sort to ensure consistent order
+    class_names.sort()
+    
+    return class_names
+
 class CustomDataset(Dataset):
-    def __init__(self, glioma_dir, meningioma_dir, no_tumor_dir, pituitary_dir, transform=None):
-        self.glioma_dir = glioma_dir
-        self.meningioma_dir = meningioma_dir
-        self.no_tumor_dir = no_tumor_dir
-        self.pituitary_dir = pituitary_dir
+    def __init__(self, base_dir, class_names, transform=None):
+        self.base_dir = base_dir
+        self.class_names = class_names
         self.transform = transform
         self.images = []
         self.labels = []
         self._load_images()
 
     def _load_images(self):
-        # Load glioma_tumor images (label 0)
-        for img_name in os.listdir(self.glioma_dir):
-            img_path = os.path.join(self.glioma_dir, img_name)
-            self.images.append(img_path)
-            self.labels.append(0)
-
-        # Load meningioma_tumor images (label 1)
-        for img_name in os.listdir(self.meningioma_dir):
-            img_path = os.path.join(self.meningioma_dir, img_name)
-            self.images.append(img_path)
-            self.labels.append(1)
-
-        # Load no_tumor images (label 2)
-        for img_name in os.listdir(self.no_tumor_dir):
-            img_path = os.path.join(self.no_tumor_dir, img_name)
-            self.images.append(img_path)
-            self.labels.append(2)
-
-        # Load pituitary_tumor images (label 3)
-        for img_name in os.listdir(self.pituitary_dir):
-            img_path = os.path.join(self.pituitary_dir, img_name)
-            self.images.append(img_path)
-            self.labels.append(3)
+        for class_idx, class_name in enumerate(self.class_names):
+            class_dir = os.path.join(self.base_dir, class_name)
+            for img_name in os.listdir(class_dir):
+                img_path = os.path.join(class_dir, img_name)
+                self.images.append(img_path)
+                self.labels.append(class_idx)
 
     def __len__(self):
         return len(self.images)
@@ -230,6 +231,10 @@ def main():
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    # Get class names from directory structure
+    class_names = get_class_names(args.dataset_dir)
+    num_classes = len(class_names)
+    
     # Get transforms
     train_transform, test_transform = get_transforms()
     
@@ -238,25 +243,16 @@ def main():
     train_dir = os.path.join(base_dir, 'Training')
     test_dir = os.path.join(base_dir, 'Testing')
     
-    glioma_dir = os.path.join(train_dir, 'glioma_tumor')
-    meningioma_dir = os.path.join(train_dir, 'meningioma_tumor')
-    no_tumor_dir = os.path.join(train_dir, 'no_tumor')
-    pituitary_dir = os.path.join(train_dir, 'pituitary_tumor')
-    
-    # Create datasets
+    # Create datasets using class names
     train_dataset = CustomDataset(
-        glioma_dir=glioma_dir,
-        meningioma_dir=meningioma_dir,
-        no_tumor_dir=no_tumor_dir,
-        pituitary_dir=pituitary_dir,
+        base_dir=train_dir,
+        class_names=class_names,
         transform=train_transform
     )
     
     test_dataset = CustomDataset(
-        glioma_dir=os.path.join(test_dir, 'glioma_tumor'),
-        meningioma_dir=os.path.join(test_dir, 'meningioma_tumor'),
-        no_tumor_dir=os.path.join(test_dir, 'no_tumor'),
-        pituitary_dir=os.path.join(test_dir, 'pituitary_tumor'),
+        base_dir=test_dir,
+        class_names=class_names,
         transform=test_transform
     )
     
@@ -287,7 +283,7 @@ def main():
         )
         
         # Initialize model
-        model = timm.create_model(args.model, pretrained=True, num_classes=4)
+        model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
         model = model.to(device)
         
         # Initialize optimizer, scheduler and criterion
@@ -383,16 +379,25 @@ def main():
             'Test MCC': test_mcc
         })
         
-        # Generate confusion matrix with larger text
+        # Generate confusion matrix with class names
         conf_matrix = confusion_matrix(all_labels, all_preds)
-        plt.figure(figsize=(15, 12))  # Increased figure size
-        sns.set(font_scale=1.5)  # Increase font size by 50%
-        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', annot_kws={"size": 20})
+        plt.figure(figsize=(15, 12))
+        sns.set(font_scale=1.5)
+        
+        sns.heatmap(conf_matrix, 
+                    annot=True, 
+                    fmt='d', 
+                    cmap='Blues', 
+                    annot_kws={"size": 20},
+                    xticklabels=class_names,
+                    yticklabels=class_names)
+        
         plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
         plt.ylabel('True Label', fontsize=20)
         plt.xlabel('Predicted Label', fontsize=20)
-        plt.xticks(fontsize=16)
+        plt.xticks(fontsize=16, rotation=45)
         plt.yticks(fontsize=16)
+        plt.tight_layout()
         wandb.log({"Confusion Matrix": wandb.Image(plt)})
         plt.close()
         
@@ -413,7 +418,6 @@ def main():
         all_labels = np.array(all_labels)
 
         # Plot ROC curve for each class
-        class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
         colors = ['blue', 'red', 'green', 'purple']
 
         for i, class_name in enumerate(class_names):
@@ -448,7 +452,6 @@ def main():
         
         # Generate Grad-CAM visualizations
         print(f"Generating Grad-CAM visualizations for Fold {fold + 1}...")
-        class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
         images_per_class = {}
         
         # Get one image per class
