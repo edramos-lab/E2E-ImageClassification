@@ -225,19 +225,10 @@ def show_grad_cam(grad_cam_map, input_image, class_name, colormap=cv2.COLORMAP_J
 def main():
     args = parse_args()
     
-    # Initialize wandb
-    wandb.init(project=args.project_name)
+    
     
     # Log configuration parameters
-    wandb.log({
-        "dataset_dir": args.dataset_dir,
-        "model": args.model,
-        "batch_size": args.batch,
-        "learning_rate": args.lr,
-        "epochs": args.epochs,
-        "dataset_ratio": args.dataset_ratio,
-        "k_folds": args.k_folds
-    })
+   
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -278,7 +269,16 @@ def main():
         print('--------------------------------')
         
         # Initialize wandb for this fold
-        wandb.init(project=args.project_name, name=f"fold_{fold + 1}")
+        wandb.init(project=args.project_name)
+        wandb.log({
+        "dataset_dir": args.dataset_dir,
+        "model": args.model,
+        "batch_size": args.batch,
+        "learning_rate": args.lr,
+        "epochs": args.epochs,
+        "dataset_ratio": args.dataset_ratio,
+        "k_folds": args.k_folds
+        })
         
         # Create data loaders for this fold
         train_subsampler = torch.utils.data.SubsetRandomSampler(train_ids)
