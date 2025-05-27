@@ -227,6 +227,14 @@ def main():
     
     # Initialize wandb
     wandb.init(project=args.project_name)
+    # Log dataset directory
+    wandb.log({"dataset_dir": args.dataset_dir})
+    wandb.log({"model": args.model})
+    wandb.log({"batch_size": args.batch})
+    wandb.log({"learning_rate": args.lr})
+    wandb.log({"epochs": args.epochs})
+    wandb.log({"dataset_ratio": args.dataset_ratio})
+    wandb.log({"k_folds": args.k_folds})
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
