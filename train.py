@@ -15,6 +15,7 @@ import seaborn as sns
 from PIL import Image
 import cv2
 import torch.nn.functional as F
+from sklearn.metrics import roc_curve, auc
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a model on the dataset.')
@@ -382,14 +383,67 @@ def main():
             'Test MCC': test_mcc
         })
         
-        # Generate confusion matrix
+        # Generate confusion matrix with larger text
         conf_matrix = confusion_matrix(all_labels, all_preds)
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
-        plt.title(f'Confusion Matrix - Fold {fold + 1}')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
+        plt.figure(figsize=(15, 12))  # Increased figure size
+        sns.set(font_scale=1.5)  # Increase font size by 50%
+        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', annot_kws={"size": 20})
+        plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
+        plt.ylabel('True Label', fontsize=20)
+        plt.xlabel('Predicted Label', fontsize=20)
+        plt.xticks(fontsize=16)
+        plt.yticks(fontsize=16)
         wandb.log({"Confusion Matrix": wandb.Image(plt)})
+        plt.close()
+        
+        # Generate ROC curves
+        plt.figure(figsize=(12, 10))
+        sns.set(font_scale=1.5)
+
+        # Get prediction probabilities
+        all_probs = []
+        with torch.no_grad():
+            for images, _ in test_loader:
+                images = images.to(device)
+                outputs = model(images)
+                probs = torch.softmax(outputs, dim=1)
+                all_probs.extend(probs.cpu().numpy())
+
+        all_probs = np.array(all_probs)
+        all_labels = np.array(all_labels)
+
+        # Plot ROC curve for each class
+        class_names = ['Glioma', 'Meningioma', 'No Tumor', 'Pituitary']
+        colors = ['blue', 'red', 'green', 'purple']
+
+        for i, class_name in enumerate(class_names):
+            # Convert to binary classification for each class
+            y_true_binary = (all_labels == i).astype(int)
+            y_score = all_probs[:, i]
+            
+            # Calculate ROC curve
+            fpr, tpr, _ = roc_curve(y_true_binary, y_score)
+            roc_auc = auc(fpr, tpr)
+            
+            # Plot ROC curve
+            plt.plot(fpr, tpr, color=colors[i], lw=2,
+                     label=f'{class_name} (AUC = {roc_auc:.2f})')
+
+        # Plot diagonal line
+        plt.plot([0, 1], [0, 1], 'k--', lw=2)
+
+        # Customize plot
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate', fontsize=20)
+        plt.ylabel('True Positive Rate', fontsize=20)
+        plt.title(f'ROC Curves - Fold {fold + 1}', fontsize=24)
+        plt.legend(loc="lower right", fontsize=16)
+        plt.grid(True, alpha=0.3)
+        plt.tick_params(axis='both', which='major', labelsize=16)
+
+        # Save and log to wandb
+        wandb.log({"ROC Curves": wandb.Image(plt)})
         plt.close()
         
         # Generate Grad-CAM visualizations
