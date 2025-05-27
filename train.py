@@ -173,7 +173,8 @@ def register_hooks(model):
     return activations
 
 def generate_grad_cam(model, input_image, class_index, activations, device):
-    input_image = input_image.unsqueeze(0).to(device)
+    # Remove the unsqueeze since input_image already has batch dimension
+    input_image = input_image.to(device)
     input_image.requires_grad = True
 
     output = model(input_image)
