@@ -277,7 +277,8 @@ def main():
         "learning_rate": args.lr,
         "epochs": args.epochs,
         "dataset_ratio": args.dataset_ratio,
-        "k_folds": args.k_folds
+        "k_folds": args.k_folds,
+        "fold": fold + 1
         })
         
         # Create data loaders for this fold
