@@ -8,7 +8,7 @@ import timm
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
 import wandb
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold, KFold
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('--dataset_ratio', type=float, default=0.3, help='Ratio of the dataset to use for training and testing')
     parser.add_argument('--k_folds', type=int, default=3, help='Number of k-folds for cross-validation')
+    parser.add_argument('--use_stratified', type=bool, default=True, help='Whether to use StratifiedKFold (True) or KFold (False)')
     
     return parser.parse_args()
 
@@ -261,235 +262,468 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=args.batch, shuffle=False)
     
     # Initialize k-fold cross validation
-    kfold = KFold(n_splits=args.k_folds, shuffle=True)
-    
-    # Training loop
-    for fold, (train_ids, val_ids) in enumerate(kfold.split(train_dataset)):
-        print(f'FOLD {fold + 1}')
-        print('--------------------------------')
-        
-        # Initialize wandb for this fold
-        wandb.init(project=args.project_name)
-        wandb.log({
-        "dataset_dir": args.dataset_dir,
-        "model": args.model,
-        "batch_size": args.batch,
-        "learning_rate": args.lr,
-        "epochs": args.epochs,
-        "dataset_ratio": args.dataset_ratio,
-        "k_folds": args.k_folds,
-        "fold": fold + 1
-        })
-        
-        # Create data loaders for this fold
-        train_subsampler = torch.utils.data.SubsetRandomSampler(train_ids)
-        val_subsampler = torch.utils.data.SubsetRandomSampler(val_ids)
-        
-        train_loader = DataLoader(
-            train_dataset, 
-            batch_size=args.batch,
-            sampler=train_subsampler
-        )
-        
-        val_loader = DataLoader(
-            train_dataset,
-            batch_size=args.batch,
-            sampler=val_subsampler
-        )
-        
-        # Initialize model
-        model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
-        model = model.to(device)
-        
-        # Initialize optimizer, scheduler and criterion
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.1)
-        criterion = nn.CrossEntropyLoss()
-        
+    if args.use_stratified:
+        kfold = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=42)
+        # Get labels for stratification
+        all_labels = [label for _, label in train_dataset]
         # Training loop
-        best_val_acc = 0.0
-        for epoch in range(args.epochs):
-            # Training phase
-            train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
-                model, train_loader, criterion, optimizer, device
-            )
-            
-            # Validation phase
-            val_loss, val_acc, val_precision, val_recall, val_f1, val_mcc = validate(
-                model, val_loader, criterion, device
-            )
-            
-            # Update learning rate
-            scheduler.step(val_loss)
-            
-            # Log metrics
-            wandb.log({
-                'Fold': fold + 1,
-                'Epoch': epoch + 1,
-                'Train Loss': train_loss,
-                'Train Accuracy': train_acc,
-                'Train Precision': train_precision,
-                'Train Recall': train_recall,
-                'Train F1 Score': train_f1,
-                'Train MCC': train_mcc,
-                'Val Loss': val_loss,
-                'Val Accuracy': val_acc,
-                'Val Precision': val_precision,
-                'Val Recall': val_recall,
-                'Val F1 Score': val_f1,
-                'Val MCC': val_mcc,
-                'Learning Rate': optimizer.param_groups[0]['lr']
-            })
-            
-            # Print training results
-            print(f"Fold [{fold + 1}], Epoch [{epoch + 1}/{args.epochs}]")
-            print(f"Train - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}, "
-                  f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
-                  f"F1 Score: {train_f1:.4f}, MCC: {train_mcc:.4f}")
-            print(f"Val - Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}, "
-                  f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, "
-                  f"F1 Score: {val_f1:.4f}, MCC: {val_mcc:.4f}")
-            print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
+        for fold, (train_idx, val_idx) in enumerate(kfold.split(range(len(train_dataset)), all_labels)):
+            print(f'FOLD {fold + 1}')
             print('--------------------------------')
             
-            # Save best model
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_acc': val_acc,
-                    'val_f1': val_f1,
-                    'val_mcc': val_mcc
-                }, f'best_model_fold_{fold + 1}.pth')
-        
-        # === Testing Phase ===
-        print(f"\nTesting on Fold {fold + 1}...")
-        model.eval()
-        all_preds = []
-        all_labels = []
-        
-        with torch.no_grad():
+            # Initialize wandb for this fold
+            wandb.init(project=args.project_name)
+            wandb.log({
+                "dataset_dir": args.dataset_dir,
+                "model": args.model,
+                "batch_size": args.batch,
+                "learning_rate": args.lr,
+                "epochs": args.epochs,
+                "dataset_ratio": args.dataset_ratio,
+                "k_folds": args.k_folds,
+                "fold": fold + 1,
+                "use_stratified": args.use_stratified
+            })
+            
+            # Create data loaders for this fold
+            train_subsampler = torch.utils.data.SubsetRandomSampler(train_idx)
+            val_subsampler = torch.utils.data.SubsetRandomSampler(val_idx)
+            
+            train_loader = DataLoader(
+                train_dataset, 
+                batch_size=args.batch,
+                sampler=train_subsampler
+            )
+            
+            val_loader = DataLoader(
+                train_dataset,
+                batch_size=args.batch,
+                sampler=val_subsampler
+            )
+            
+            # Initialize model
+            model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
+            model = model.to(device)
+            
+            # Initialize optimizer, scheduler and criterion
+            optimizer = optim.Adam(model.parameters(), lr=args.lr)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.1)
+            criterion = nn.CrossEntropyLoss()
+            
+            # Training loop
+            best_val_acc = 0.0
+            for epoch in range(args.epochs):
+                # Training phase
+                train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
+                    model, train_loader, criterion, optimizer, device
+                )
+                
+                # Validation phase
+                val_loss, val_acc, val_precision, val_recall, val_f1, val_mcc = validate(
+                    model, val_loader, criterion, device
+                )
+                
+                # Update learning rate
+                scheduler.step(val_loss)
+                
+                # Log metrics
+                wandb.log({
+                    'Fold': fold + 1,
+                    'Epoch': epoch + 1,
+                    'Train Loss': train_loss,
+                    'Train Accuracy': train_acc,
+                    'Train Precision': train_precision,
+                    'Train Recall': train_recall,
+                    'Train F1 Score': train_f1,
+                    'Train MCC': train_mcc,
+                    'Val Loss': val_loss,
+                    'Val Accuracy': val_acc,
+                    'Val Precision': val_precision,
+                    'Val Recall': val_recall,
+                    'Val F1 Score': val_f1,
+                    'Val MCC': val_mcc,
+                    'Learning Rate': optimizer.param_groups[0]['lr']
+                })
+                
+                # Print training results
+                print(f"Fold [{fold + 1}], Epoch [{epoch + 1}/{args.epochs}]")
+                print(f"Train - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}, "
+                      f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
+                      f"F1 Score: {train_f1:.4f}, MCC: {train_mcc:.4f}")
+                print(f"Val - Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}, "
+                      f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, "
+                      f"F1 Score: {val_f1:.4f}, MCC: {val_mcc:.4f}")
+                print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
+                print('--------------------------------')
+                
+                # Save best model
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'val_acc': val_acc,
+                        'val_f1': val_f1,
+                        'val_mcc': val_mcc
+                    }, f'best_model_fold_{fold + 1}.pth')
+            
+            # === Testing Phase ===
+            print(f"\nTesting on Fold {fold + 1}...")
+            model.eval()
+            all_preds = []
+            all_labels = []
+            
+            with torch.no_grad():
+                for images, labels in test_loader:
+                    images, labels = images.to(device), labels.to(device)
+                    outputs = model(images)
+                    _, preds = torch.max(outputs, 1)
+                    all_preds.extend(preds.cpu().numpy())
+                    all_labels.extend(labels.cpu().numpy())
+            
+            # Calculate test metrics
+            test_acc = accuracy_score(all_labels, all_preds)
+            test_precision = precision_score(all_labels, all_preds, average='weighted')
+            test_recall = recall_score(all_labels, all_preds, average='weighted')
+            test_f1 = f1_score(all_labels, all_preds, average='weighted')
+            test_mcc = matthews_corrcoef(all_labels, all_preds)
+            
+            # Log test metrics
+            wandb.log({
+                'Test Accuracy': test_acc,
+                'Test Precision': test_precision,
+                'Test Recall': test_recall,
+                'Test F1 Score': test_f1,
+                'Test MCC': test_mcc
+            })
+            
+            # Generate confusion matrix with class names
+            conf_matrix = confusion_matrix(all_labels, all_preds)
+            plt.figure(figsize=(15, 12))
+            sns.set(font_scale=1.5)
+            
+            sns.heatmap(conf_matrix, 
+                        annot=True, 
+                        fmt='d', 
+                        cmap='Blues', 
+                        annot_kws={"size": 20},
+                        xticklabels=class_names,
+                        yticklabels=class_names)
+            
+            plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
+            plt.ylabel('True Label', fontsize=20)
+            plt.xlabel('Predicted Label', fontsize=20)
+            plt.xticks(fontsize=16, rotation=45)
+            plt.yticks(fontsize=16)
+            plt.tight_layout()
+            wandb.log({"Confusion Matrix": wandb.Image(plt)})
+            plt.close()
+            
+            # Generate ROC curves
+            plt.figure(figsize=(12, 10))
+            sns.set(font_scale=1.5)
+
+            # Get prediction probabilities
+            all_probs = []
+            with torch.no_grad():
+                for images, _ in test_loader:
+                    images = images.to(device)
+                    outputs = model(images)
+                    probs = torch.softmax(outputs, dim=1)
+                    all_probs.extend(probs.cpu().numpy())
+
+            all_probs = np.array(all_probs)
+            all_labels = np.array(all_labels)
+
+            # Plot ROC curve for each class
+            colors = ['blue', 'red', 'green', 'purple']
+
+            for i, class_name in enumerate(class_names):
+                # Convert to binary classification for each class
+                y_true_binary = (all_labels == i).astype(int)
+                y_score = all_probs[:, i]
+                
+                # Calculate ROC curve
+                fpr, tpr, _ = roc_curve(y_true_binary, y_score)
+                roc_auc = auc(fpr, tpr)
+                
+                # Plot ROC curve
+                plt.plot(fpr, tpr, color=colors[i], lw=2,
+                         label=f'{class_name} (AUC = {roc_auc:.2f})')
+
+            # Plot diagonal line
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+
+            # Customize plot
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate', fontsize=20)
+            plt.ylabel('True Positive Rate', fontsize=20)
+            plt.title(f'ROC Curves - Fold {fold + 1}', fontsize=24)
+            plt.legend(loc="lower right", fontsize=16)
+            plt.grid(True, alpha=0.3)
+            plt.tick_params(axis='both', which='major', labelsize=16)
+
+            # Save and log to wandb
+            wandb.log({"ROC Curves": wandb.Image(plt)})
+            plt.close()
+            
+            # Generate Grad-CAM visualizations
+            print(f"Generating Grad-CAM visualizations for Fold {fold + 1}...")
+            images_per_class = {}
+            
+            # Get one image per class
             for images, labels in test_loader:
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                _, preds = torch.max(outputs, 1)
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-        
-        # Calculate test metrics
-        test_acc = accuracy_score(all_labels, all_preds)
-        test_precision = precision_score(all_labels, all_preds, average='weighted')
-        test_recall = recall_score(all_labels, all_preds, average='weighted')
-        test_f1 = f1_score(all_labels, all_preds, average='weighted')
-        test_mcc = matthews_corrcoef(all_labels, all_preds)
-        
-        # Log test metrics
-        wandb.log({
-            'Test Accuracy': test_acc,
-            'Test Precision': test_precision,
-            'Test Recall': test_recall,
-            'Test F1 Score': test_f1,
-            'Test MCC': test_mcc
-        })
-        
-        # Generate confusion matrix with class names
-        conf_matrix = confusion_matrix(all_labels, all_preds)
-        plt.figure(figsize=(15, 12))
-        sns.set(font_scale=1.5)
-        
-        sns.heatmap(conf_matrix, 
-                    annot=True, 
-                    fmt='d', 
-                    cmap='Blues', 
-                    annot_kws={"size": 20},
-                    xticklabels=class_names,
-                    yticklabels=class_names)
-        
-        plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
-        plt.ylabel('True Label', fontsize=20)
-        plt.xlabel('Predicted Label', fontsize=20)
-        plt.xticks(fontsize=16, rotation=45)
-        plt.yticks(fontsize=16)
-        plt.tight_layout()
-        wandb.log({"Confusion Matrix": wandb.Image(plt)})
-        plt.close()
-        
-        # Generate ROC curves
-        plt.figure(figsize=(12, 10))
-        sns.set(font_scale=1.5)
-
-        # Get prediction probabilities
-        all_probs = []
-        with torch.no_grad():
-            for images, _ in test_loader:
-                images = images.to(device)
-                outputs = model(images)
-                probs = torch.softmax(outputs, dim=1)
-                all_probs.extend(probs.cpu().numpy())
-
-        all_probs = np.array(all_probs)
-        all_labels = np.array(all_labels)
-
-        # Plot ROC curve for each class
-        colors = ['blue', 'red', 'green', 'purple']
-
-        for i, class_name in enumerate(class_names):
-            # Convert to binary classification for each class
-            y_true_binary = (all_labels == i).astype(int)
-            y_score = all_probs[:, i]
-            
-            # Calculate ROC curve
-            fpr, tpr, _ = roc_curve(y_true_binary, y_score)
-            roc_auc = auc(fpr, tpr)
-            
-            # Plot ROC curve
-            plt.plot(fpr, tpr, color=colors[i], lw=2,
-                     label=f'{class_name} (AUC = {roc_auc:.2f})')
-
-        # Plot diagonal line
-        plt.plot([0, 1], [0, 1], 'k--', lw=2)
-
-        # Customize plot
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate', fontsize=20)
-        plt.ylabel('True Positive Rate', fontsize=20)
-        plt.title(f'ROC Curves - Fold {fold + 1}', fontsize=24)
-        plt.legend(loc="lower right", fontsize=16)
-        plt.grid(True, alpha=0.3)
-        plt.tick_params(axis='both', which='major', labelsize=16)
-
-        # Save and log to wandb
-        wandb.log({"ROC Curves": wandb.Image(plt)})
-        plt.close()
-        
-        # Generate Grad-CAM visualizations
-        print(f"Generating Grad-CAM visualizations for Fold {fold + 1}...")
-        images_per_class = {}
-        
-        # Get one image per class
-        for images, labels in test_loader:
-            for img, lbl in zip(images, labels):
-                cls = lbl.item()
-                if cls not in images_per_class:
-                    images_per_class[cls] = img.unsqueeze(0).to(device)
+                for img, lbl in zip(images, labels):
+                    cls = lbl.item()
+                    if cls not in images_per_class:
+                        images_per_class[cls] = img.unsqueeze(0).to(device)
+                    if len(images_per_class) == len(class_names):
+                        break
                 if len(images_per_class) == len(class_names):
                     break
-            if len(images_per_class) == len(class_names):
-                break
-        
-        # Generate Grad-CAM for each class
-        for cls_idx in range(len(class_names)):
-            if cls_idx in images_per_class:
-                input_image = images_per_class[cls_idx]
-                activations = register_hooks(model)
-                grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
-                show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
-        
-        # Finish wandb run for this fold
-        wandb.finish()
+            
+            # Generate Grad-CAM for each class
+            for cls_idx in range(len(class_names)):
+                if cls_idx in images_per_class:
+                    input_image = images_per_class[cls_idx]
+                    activations = register_hooks(model)
+                    grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
+                    show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
+            
+            # Finish wandb run for this fold
+            wandb.finish()
+    else:
+        kfold = KFold(n_splits=args.k_folds, shuffle=True, random_state=42)
+        # Training loop
+        for fold, (train_idx, val_idx) in enumerate(kfold.split(range(len(train_dataset)))):
+            print(f'FOLD {fold + 1}')
+            print('--------------------------------')
+            
+            # Initialize wandb for this fold
+            wandb.init(project=args.project_name)
+            wandb.log({
+                "dataset_dir": args.dataset_dir,
+                "model": args.model,
+                "batch_size": args.batch,
+                "learning_rate": args.lr,
+                "epochs": args.epochs,
+                "dataset_ratio": args.dataset_ratio,
+                "k_folds": args.k_folds,
+                "fold": fold + 1,
+                "use_stratified": args.use_stratified
+            })
+            
+            # Create data loaders for this fold
+            train_subsampler = torch.utils.data.SubsetRandomSampler(train_idx)
+            val_subsampler = torch.utils.data.SubsetRandomSampler(val_idx)
+            
+            train_loader = DataLoader(
+                train_dataset, 
+                batch_size=args.batch,
+                sampler=train_subsampler
+            )
+            
+            val_loader = DataLoader(
+                train_dataset,
+                batch_size=args.batch,
+                sampler=val_subsampler
+            )
+            
+            # Initialize model
+            model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
+            model = model.to(device)
+            
+            # Initialize optimizer, scheduler and criterion
+            optimizer = optim.Adam(model.parameters(), lr=args.lr)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.1)
+            criterion = nn.CrossEntropyLoss()
+            
+            # Training loop
+            best_val_acc = 0.0
+            for epoch in range(args.epochs):
+                # Training phase
+                train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
+                    model, train_loader, criterion, optimizer, device
+                )
+                
+                # Validation phase
+                val_loss, val_acc, val_precision, val_recall, val_f1, val_mcc = validate(
+                    model, val_loader, criterion, device
+                )
+                
+                # Update learning rate
+                scheduler.step(val_loss)
+                
+                # Log metrics
+                wandb.log({
+                    'Fold': fold + 1,
+                    'Epoch': epoch + 1,
+                    'Train Loss': train_loss,
+                    'Train Accuracy': train_acc,
+                    'Train Precision': train_precision,
+                    'Train Recall': train_recall,
+                    'Train F1 Score': train_f1,
+                    'Train MCC': train_mcc,
+                    'Val Loss': val_loss,
+                    'Val Accuracy': val_acc,
+                    'Val Precision': val_precision,
+                    'Val Recall': val_recall,
+                    'Val F1 Score': val_f1,
+                    'Val MCC': val_mcc,
+                    'Learning Rate': optimizer.param_groups[0]['lr']
+                })
+                
+                # Print training results
+                print(f"Fold [{fold + 1}], Epoch [{epoch + 1}/{args.epochs}]")
+                print(f"Train - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}, "
+                      f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
+                      f"F1 Score: {train_f1:.4f}, MCC: {train_mcc:.4f}")
+                print(f"Val - Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}, "
+                      f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, "
+                      f"F1 Score: {val_f1:.4f}, MCC: {val_mcc:.4f}")
+                print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
+                print('--------------------------------')
+                
+                # Save best model
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'val_acc': val_acc,
+                        'val_f1': val_f1,
+                        'val_mcc': val_mcc
+                    }, f'best_model_fold_{fold + 1}.pth')
+            
+            # === Testing Phase ===
+            print(f"\nTesting on Fold {fold + 1}...")
+            model.eval()
+            all_preds = []
+            all_labels = []
+            
+            with torch.no_grad():
+                for images, labels in test_loader:
+                    images, labels = images.to(device), labels.to(device)
+                    outputs = model(images)
+                    _, preds = torch.max(outputs, 1)
+                    all_preds.extend(preds.cpu().numpy())
+                    all_labels.extend(labels.cpu().numpy())
+            
+            # Calculate test metrics
+            test_acc = accuracy_score(all_labels, all_preds)
+            test_precision = precision_score(all_labels, all_preds, average='weighted')
+            test_recall = recall_score(all_labels, all_preds, average='weighted')
+            test_f1 = f1_score(all_labels, all_preds, average='weighted')
+            test_mcc = matthews_corrcoef(all_labels, all_preds)
+            
+            # Log test metrics
+            wandb.log({
+                'Test Accuracy': test_acc,
+                'Test Precision': test_precision,
+                'Test Recall': test_recall,
+                'Test F1 Score': test_f1,
+                'Test MCC': test_mcc
+            })
+            
+            # Generate confusion matrix with class names
+            conf_matrix = confusion_matrix(all_labels, all_preds)
+            plt.figure(figsize=(15, 12))
+            sns.set(font_scale=1.5)
+            
+            sns.heatmap(conf_matrix, 
+                        annot=True, 
+                        fmt='d', 
+                        cmap='Blues', 
+                        annot_kws={"size": 20},
+                        xticklabels=class_names,
+                        yticklabels=class_names)
+            
+            plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
+            plt.ylabel('True Label', fontsize=20)
+            plt.xlabel('Predicted Label', fontsize=20)
+            plt.xticks(fontsize=16, rotation=45)
+            plt.yticks(fontsize=16)
+            plt.tight_layout()
+            wandb.log({"Confusion Matrix": wandb.Image(plt)})
+            plt.close()
+            
+            # Generate ROC curves
+            plt.figure(figsize=(12, 10))
+            sns.set(font_scale=1.5)
+
+            # Get prediction probabilities
+            all_probs = []
+            with torch.no_grad():
+                for images, _ in test_loader:
+                    images = images.to(device)
+                    outputs = model(images)
+                    probs = torch.softmax(outputs, dim=1)
+                    all_probs.extend(probs.cpu().numpy())
+
+            all_probs = np.array(all_probs)
+            all_labels = np.array(all_labels)
+
+            # Plot ROC curve for each class
+            colors = ['blue', 'red', 'green', 'purple']
+
+            for i, class_name in enumerate(class_names):
+                # Convert to binary classification for each class
+                y_true_binary = (all_labels == i).astype(int)
+                y_score = all_probs[:, i]
+                
+                # Calculate ROC curve
+                fpr, tpr, _ = roc_curve(y_true_binary, y_score)
+                roc_auc = auc(fpr, tpr)
+                
+                # Plot ROC curve
+                plt.plot(fpr, tpr, color=colors[i], lw=2,
+                         label=f'{class_name} (AUC = {roc_auc:.2f})')
+
+            # Plot diagonal line
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+
+            # Customize plot
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate', fontsize=20)
+            plt.ylabel('True Positive Rate', fontsize=20)
+            plt.title(f'ROC Curves - Fold {fold + 1}', fontsize=24)
+            plt.legend(loc="lower right", fontsize=16)
+            plt.grid(True, alpha=0.3)
+            plt.tick_params(axis='both', which='major', labelsize=16)
+
+            # Save and log to wandb
+            wandb.log({"ROC Curves": wandb.Image(plt)})
+            plt.close()
+            
+            # Generate Grad-CAM visualizations
+            print(f"Generating Grad-CAM visualizations for Fold {fold + 1}...")
+            images_per_class = {}
+            
+            # Get one image per class
+            for images, labels in test_loader:
+                for img, lbl in zip(images, labels):
+                    cls = lbl.item()
+                    if cls not in images_per_class:
+                        images_per_class[cls] = img.unsqueeze(0).to(device)
+                    if len(images_per_class) == len(class_names):
+                        break
+                if len(images_per_class) == len(class_names):
+                    break
+            
+            # Generate Grad-CAM for each class
+            for cls_idx in range(len(class_names)):
+                if cls_idx in images_per_class:
+                    input_image = images_per_class[cls_idx]
+                    activations = register_hooks(model)
+                    grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
+                    show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
+            
+            # Finish wandb run for this fold
+            wandb.finish()
 
 if __name__ == '__main__':
     main() 
