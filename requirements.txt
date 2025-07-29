@@ -1,10 +1,21 @@
+# Core ML dependencies
 torch>=1.9.0
 torchvision>=0.10.0
 timm>=0.5.4
 wandb>=0.12.0
-opencv-python>=4.5.3
-seaborn>=0.11.2
+numpy>=1.21.0
 scikit-learn>=0.24.2
-pillow>=8.3.1
+
+# Visualization and plotting
 matplotlib>=3.4.3
-numpy>=1.21.0 
+seaborn>=0.11.2
+plotly>=5.0.0
+
+# Image processing
+opencv-python>=4.5.3
+pillow>=8.3.1
+
+# Model export and deployment (optional)
+onnxruntime>=1.8.0
+tensorrt>=8.0.0
+pycuda>=2021.1 

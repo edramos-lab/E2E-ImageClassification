@@ -27,16 +27,30 @@ def parse_args():
 
 def load_model(model_path, model_name, num_classes, device):
     """Load the trained PyTorch model."""
-    # Create model architecture
+    print(f"Creating model: {model_name}")
     model = timm.create_model(model_name, pretrained=False, num_classes=num_classes)
-    
-    # Load trained weights
-    checkpoint = torch.load(model_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
+
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+
+    if 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    elif isinstance(checkpoint, dict):
+        state_dict = checkpoint
+    else:
+        raise RuntimeError("Invalid checkpoint format.")
+
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as e:
+        print("\n🔥 ERROR: Model architecture and checkpoint do not match.")
+        print("Did you forget to set --model_name correctly?")
+        print(f"Model name you used: {model_name}")
+        raise e
+
+    model.to(device)
     model.eval()
-    
     return model
+
 
 def export_to_onnx(model, output_path, input_size, batch_size, device):
     """Export PyTorch model to ONNX format."""
@@ -67,43 +81,54 @@ def export_to_onnx(model, output_path, input_size, batch_size, device):
     print("ONNX model exported successfully!")
 
 def export_to_tensorrt(onnx_path, output_path, fp16=False, int8=False):
-    """Export ONNX model to TensorRT format."""
-    print(f"Exporting to TensorRT: {output_path}")
-    
-    # Create TensorRT logger
-    logger = trt.Logger(trt.Logger.WARNING)
-    
-    # Create builder
-    builder = trt.Builder(logger)
-    config = builder.create_builder_config()
-    
-    # Set precision
-    if fp16 and builder.platform_has_fast_fp16:
-        config.set_flag(trt.BuilderFlag.FP16)
-        print("Using FP16 precision")
-    elif int8 and builder.platform_has_fast_int8:
-        config.set_flag(trt.BuilderFlag.INT8)
-        config.set_flag(trt.BuilderFlag.STRICT_TYPES)
-        print("Using INT8 precision")
-    
-    # Parse ONNX model
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
-    parser = trt.OnnxParser(network, logger)
-    
-    with open(onnx_path, 'rb') as model:
-        if not parser.parse(model.read()):
-            for error in range(parser.num_errors):
-                print(parser.get_error(error))
-            raise RuntimeError("Failed to parse ONNX model")
-    
-    # Build engine
-    engine = builder.build_engine(network, config)
-    
-    # Save engine
-    with open(output_path, 'wb') as f:
-        f.write(engine.serialize())
-    
-    print("TensorRT model exported successfully!")
+    import tensorrt as trt
+
+    TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+
+    with trt.Builder(TRT_LOGGER) as builder, \
+         builder.create_network(flags=1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)) as network, \
+         trt.OnnxParser(network, TRT_LOGGER) as parser:
+
+        config = builder.create_builder_config()
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
+
+        if fp16 and builder.platform_has_fast_fp16:
+            config.set_flag(trt.BuilderFlag.FP16)
+            print("✅ Using FP16 mode")
+        if int8 and builder.platform_has_fast_int8:
+            config.set_flag(trt.BuilderFlag.INT8)
+            config.set_flag(trt.BuilderFlag.STRICT_TYPES)
+            print("✅ Using INT8 mode")
+
+        print(f"Parsing ONNX: {onnx_path}")
+        with open(onnx_path, 'rb') as model:
+            if not parser.parse(model.read()):
+                for i in range(parser.num_errors):
+                    print(parser.get_error(i))
+                raise RuntimeError("❌ Failed to parse the ONNX model")
+
+        # 🔧 Define optimization profile for dynamic input
+        profile = builder.create_optimization_profile()
+        input_name = network.get_input(0).name
+        input_shape = (1, 3, 224, 224)
+
+        profile.set_shape(input_name,
+                          min=input_shape,
+                          opt=input_shape,
+                          max=(4, 3, 224, 224))  # puedes ajustar el max batch
+
+        config.add_optimization_profile(profile)
+
+        print("🔧 Building serialized TensorRT engine...")
+        serialized_engine = builder.build_serialized_network(network, config)
+        if serialized_engine is None:
+            raise RuntimeError("❌ Failed to build TensorRT engine!")
+
+        with open(output_path, 'wb') as f:
+            f.write(serialized_engine)
+
+        print("✅ TensorRT engine exported successfully!")
+
 
 def test_onnx_inference(onnx_path, test_image_path, class_names):
     """Test ONNX model inference."""

@@ -47,4 +47,13 @@ wandb/
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Benchmark and Export files
+exported_models/
+*.onnx
+*.engine
+benchmark_results/
+*.png
+*.jpg
+*.jpeg 
