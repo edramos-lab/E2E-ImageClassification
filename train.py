@@ -596,7 +596,7 @@ def main():
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, f'best_model_{args.model}_fold_{fold + 1}.pt')
+                    }, f'best_model_{args.model}_fold_{fold + 1}.pth')
             
             # === Testing Phase ===
             print(f"\nTesting on Fold {fold + 1}...")
