@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  jetson-benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    container_name: jetson-benchmark
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - DISPLAY=${DISPLAY}
+    volumes:
+      # Mount local directories for models and results
+      - ./models:/workspace/models
+      - ./results:/workspace/results
+      - ./exported_models:/workspace/exported_models
+      # Mount the benchmarking scripts
+      - ./benchmark_models.py:/workspace/benchmark_models.py
+      - ./benchmark_models_plotly.py:/workspace/benchmark_models_plotly.py
+      - ./run_benchmark_example.py:/workspace/run_benchmark_example.py
+      # Mount X11 for GUI (optional)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    network_mode: host
+    privileged: true
+    stdin_open: true
+    tty: true
+    command: bash 

@@ -1,0 +1,152 @@
+# Dockerfile for Jetson Xavier AGX and Orin benchmarking
+# Based on NVIDIA L4T (Linux for Tegra) with Python 3.8
+
+FROM nvcr.io/nvidia/l4t-base:r35.2.1
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
+# Update package lists and install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.8 \
+    python3.8-dev \
+    python3.8-pip \
+    python3.8-venv \
+    python3.8-distutils \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symbolic links for Python 3.8
+RUN ln -sf /usr/bin/python3.8 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.8 /usr/bin/python
+
+# Upgrade pip
+RUN python3.8 -m pip install --upgrade pip setuptools wheel
+
+# Install PyCUDA dependencies
+RUN apt-get update && apt-get install -y \
+    libboost-all-dev \
+    libboost-python-dev \
+    libboost-thread-dev \
+    libboost-system-dev \
+    libboost-filesystem-dev \
+    libboost-regex-dev \
+    libboost-date-time-dev \
+    libboost-serialization-dev \
+    libboost-program-options-dev \
+    libboost-test-dev \
+    libboost-wave-dev \
+    libboost-math-dev \
+    libboost-graph-dev \
+    libboost-iostreams-dev \
+    libboost-locale-dev \
+    libboost-log-dev \
+    libboost-type-erasure-dev \
+    libboost-coroutine-dev \
+    libboost-fiber-dev \
+    libboost-stacktrace-dev \
+    libboost-exception-dev \
+    libboost-contract-dev \
+    libboost-mpi-dev \
+    libboost-python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CUDA development tools
+RUN apt-get update && apt-get install -y \
+    cuda-toolkit-11-4 \
+    cuda-runtime-11-4 \
+    cuda-drivers \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
+WORKDIR /workspace
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN python3.8 -m pip install --no-cache-dir -r requirements.txt
+
+# Install PyCUDA with specific version for Jetson
+RUN python3.8 -m pip install --no-cache-dir pycuda==2022.2.2
+
+# Install TensorRT Python bindings
+RUN python3.8 -m pip install --no-cache-dir nvidia-pyindex && \
+    python3.8 -m pip install --no-cache-dir nvidia-tensorrt==8.5.1.7
+
+# Install ONNX Runtime for Jetson
+RUN python3.8 -m pip install --no-cache-dir onnxruntime-gpu==1.15.1
+
+# Install additional dependencies for benchmarking
+RUN python3.8 -m pip install --no-cache-dir \
+    plotly==5.17.0 \
+    kaleido==0.2.1 \
+    psutil==5.9.5 \
+    tqdm==4.66.1
+
+# Copy the benchmarking scripts
+COPY benchmark_models.py .
+COPY benchmark_models_plotly.py .
+COPY run_benchmark_example.py .
+
+# Create directories for models and results
+RUN mkdir -p /workspace/models /workspace/results /workspace/exported_models
+
+# Set environment variables for TensorRT
+ENV TENSORRT_ROOT=/usr/lib/aarch64-linux-gnu
+ENV LD_LIBRARY_PATH=${TENSORRT_ROOT}:${LD_LIBRARY_PATH}
+
+# Create a script to check system information
+RUN echo '#!/bin/bash\n\
+echo "=== Jetson System Information ==="\n\
+echo "Architecture: $(uname -m)"\n\
+echo "Kernel: $(uname -r)"\n\
+echo "Python version: $(python3.8 --version)"\n\
+echo "CUDA version: $(nvcc --version | grep "release" | awk "{print \$6}")"\n\
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits)"\n\
+echo "Memory: $(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits)"\n\
+echo "=== Python Packages ==="\n\
+python3.8 -m pip list | grep -E "(torch|tensorrt|onnx|plotly|pycuda)"\n\
+echo "=== CUDA Information ==="\n\
+python3.8 -c "import torch; print(f\"PyTorch CUDA available: {torch.cuda.is_available()}\"); print(f\"CUDA version: {torch.version.cuda}\"); print(f\"GPU count: {torch.cuda.device_count()}\")"\n\
+' > /workspace/check_system.sh && chmod +x /workspace/check_system.sh
+
+# Create entrypoint script
+RUN echo '#!/bin/bash\n\
+echo "=== Jetson Benchmarking Container ==="\n\
+echo "Container started successfully!"\n\
+echo "Available commands:"\n\
+echo "  - python3.8 benchmark_models.py --help"\n\
+echo "  - python3.8 benchmark_models_plotly.py --help"\n\
+echo "  - python3.8 run_benchmark_example.py"\n\
+echo "  - ./check_system.sh"\n\
+echo ""\n\
+echo "Example usage:"\n\
+echo "  python3.8 benchmark_models_plotly.py \\\n\
+    --onnx_path /workspace/models/model.onnx \\\n\
+    --tensorrt_path /workspace/models/model.engine \\\n\
+    --output_dir /workspace/results \\\n\
+    --num_runs 100 \\\n\
+    --batch_size 1"\n\
+echo ""\n\
+exec "$@"\n\
+' > /workspace/entrypoint.sh && chmod +x /workspace/entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["/workspace/entrypoint.sh"]
+CMD ["bash"] 
