@@ -26,12 +26,16 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Check if docker-compose is installed
-if ! command -v docker-compose &> /dev/null; then
-    echo "❌ Docker Compose is not installed. Please install Docker Compose first."
-    echo "   For Jetson, follow: https://docs.docker.com/compose/install/"
+# Check if Docker Compose v2 is available
+if ! docker compose version &> /dev/null; then
+    echo "❌ Docker Compose v2 is not installed. Please install Docker Compose v2."
+    echo "   You can install it with:"
+    echo "   mkdir -p ~/.docker/cli-plugins/"
+    echo "   curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-aarch64 -o ~/.docker/cli-plugins/docker-compose"
+    echo "   chmod +x ~/.docker/cli-plugins/docker-compose"
     exit 1
 fi
+
 
 # Check if nvidia-docker is available
 if ! docker info | grep -q "nvidia"; then
@@ -51,7 +55,7 @@ mkdir -p models results exported_models
 
 # Build the Docker image
 echo "🔨 Building Jetson benchmarking container..."
-docker-compose -f docker-compose.jetson.yml build
+docker compose -f docker-compose.jetson.yml build
 
 # Check if build was successful
 if [ $? -eq 0 ]; then
@@ -80,7 +84,7 @@ echo "    --batch_size 1"
 echo ""
 
 # Start the container in interactive mode
-docker-compose -f docker-compose.jetson.yml up -d
+docker compose -f docker-compose.jetson.yml up -d
 
 echo "✅ Container is running!"
 echo "To access the container:"

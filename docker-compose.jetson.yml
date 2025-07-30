@@ -1,10 +1,11 @@
-version: '3.8'
+version: "3.8"
 
 services:
   jetson-benchmark:
     build:
       context: .
       dockerfile: Dockerfile.jetson
+    image: jetson-benchmark
     container_name: jetson-benchmark
     runtime: nvidia
     environment:
@@ -12,22 +13,30 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - DISPLAY=${DISPLAY}
     volumes:
-      # Mount local directories for models and results
+      # Mount host directories into the container
+      - /home/jetsonagx/exported_models:/workspace/exported_models
+      - /home/jetsonagx/inference-result:/workspace/results
+      - /home/jetsonagx/Brain-Cancer-MultiClass/Brain-Tumor-Classification2/Testing:/workspace/test_folder
+      - /usr/src/tensorrt/bin/trtexec:/usr/local/bin/trtexec jetson-benchmark
+
       - ./models:/workspace/models
-      - ./results:/workspace/results
-      - ./exported_models:/workspace/exported_models
-      # Mount the benchmarking scripts
+      
+      # Optional: Mount scripts if you want to edit them live
       - ./benchmark_models.py:/workspace/benchmark_models.py
-      - ./benchmark_models_plotly.py:/workspace/benchmark_models_plotly.py
+      - ./benchmark_models_plotly.py:/workspace/benchmark_models_plotly_jetson.py
       - ./run_benchmark_example.py:/workspace/run_benchmark_example.py
-      # Mount X11 for GUI (optional)
+
+      # Optional: GUI forwarding for any plot windows (if using matplotlib directly)
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
     devices:
-      - /dev/nvidia0:/dev/nvidia0
-      - /dev/nvidiactl:/dev/nvidiactl
-      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia0
+      - /dev/nvidiactl
+      - /dev/nvidia-uvm
+
     network_mode: host
     privileged: true
     stdin_open: true
     tty: true
-    command: bash 
+    command: bash
+

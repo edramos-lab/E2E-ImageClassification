@@ -1,7 +1,8 @@
 # Dockerfile for Jetson Xavier AGX and Orin benchmarking
 # Based on NVIDIA L4T (Linux for Tegra) with Python 3.8
 
-FROM nvcr.io/nvidia/l4t-base:r35.2.1
+FROM nvcr.io/nvidia/l4t-jetpack:r35.2.1
+
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -14,7 +15,6 @@ ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 RUN apt-get update && apt-get install -y \
     python3.8 \
     python3.8-dev \
-    python3.8-pip \
     python3.8-venv \
     python3.8-distutils \
     build-essential \
@@ -29,7 +29,12 @@ RUN apt-get update && apt-get install -y \
     libxrender-dev \
     libgomp1 \
     libgcc-s1 \
+    && curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o get-pip.py \
+    && python3.8 get-pip.py \
+    && rm get-pip.py \
     && rm -rf /var/lib/apt/lists/*
+
+
 
 # Create symbolic links for Python 3.8
 RUN ln -sf /usr/bin/python3.8 /usr/bin/python3 && \
@@ -38,59 +43,51 @@ RUN ln -sf /usr/bin/python3.8 /usr/bin/python3 && \
 # Upgrade pip
 RUN python3.8 -m pip install --upgrade pip setuptools wheel
 
-# Install PyCUDA dependencies
-RUN apt-get update && apt-get install -y \
-    libboost-all-dev \
-    libboost-python-dev \
-    libboost-thread-dev \
-    libboost-system-dev \
-    libboost-filesystem-dev \
-    libboost-regex-dev \
-    libboost-date-time-dev \
-    libboost-serialization-dev \
-    libboost-program-options-dev \
-    libboost-test-dev \
-    libboost-wave-dev \
-    libboost-math-dev \
-    libboost-graph-dev \
-    libboost-iostreams-dev \
-    libboost-locale-dev \
-    libboost-log-dev \
-    libboost-type-erasure-dev \
-    libboost-coroutine-dev \
-    libboost-fiber-dev \
-    libboost-stacktrace-dev \
-    libboost-exception-dev \
-    libboost-contract-dev \
-    libboost-mpi-dev \
-    libboost-python3-dev \
-    && rm -rf /var/lib/apt/lists/*
 
-# Install CUDA development tools
-RUN apt-get update && apt-get install -y \
-    cuda-toolkit-11-4 \
-    cuda-runtime-11-4 \
-    cuda-drivers \
-    && rm -rf /var/lib/apt/lists/*
+
+
 
 # Create working directory
 WORKDIR /workspace
 
 # Copy requirements file
-COPY requirements.txt .
+COPY requirements_jetson.txt .
 
 # Install Python dependencies
-RUN python3.8 -m pip install --no-cache-dir -r requirements.txt
+RUN python3.8 -m pip install --no-cache-dir -r requirements_jetson.txt
 
-# Install PyCUDA with specific version for Jetson
-RUN python3.8 -m pip install --no-cache-dir pycuda==2022.2.2
+
+# Install PyCUDA from source (Jetson-compatible)
+# Install PyCUDA from source (Jetson-compatible)
+# Install build tools and Python dev headers
+RUN apt-get update && apt-get install -y \
+    libboost-all-dev \
+    libssl-dev \
+    libffi-dev \
+    pkg-config \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# Build PyCUDA from source using system CUDA (JetPack)
+RUN git clone https://github.com/inducer/pycuda.git /tmp/pycuda && \
+    cd /tmp/pycuda && \
+    python3.8 configure.py --cuda-root=/usr/local/cuda --cudadrv-lib-dir=/usr/lib/aarch64-linux-gnu && \
+    python3.8 -m pip install . && \
+    cd / && rm -rf /tmp/pycuda
+
+
 
 # Install TensorRT Python bindings
-RUN python3.8 -m pip install --no-cache-dir nvidia-pyindex && \
-    python3.8 -m pip install --no-cache-dir nvidia-tensorrt==8.5.1.7
+# TensorRT bindings ya vienen con JetPack. Solo enlaza correctamente
+RUN ln -s /usr/lib/python3.8/dist-packages/tensorrt /usr/local/lib/python3.8/dist-packages/tensorrt
+
 
 # Install ONNX Runtime for Jetson
-RUN python3.8 -m pip install --no-cache-dir onnxruntime-gpu==1.15.1
+RUN python3.8 -m pip install onnxruntime==1.15.1
+
+
+
 
 # Install additional dependencies for benchmarking
 RUN python3.8 -m pip install --no-cache-dir \
