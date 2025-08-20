@@ -54,6 +54,26 @@ exported_models/
 *.onnx
 *.engine
 benchmark_results/
+
+# Large Dataset Folders (exclude from commits)
+Brain-Tumor-Classification2/
+SartajDataset/
+dataset_preparation.py
+dataset_paths.csv
+dataset_paths-copy.csv
+generate_dataset_info.py
+
+# Image files (exclude large image collections)
 *.png
 *.jpg
-*.jpeg 
+*.jpeg
+*.tiff
+*.bmp
+*.gif
+
+# Training data and large files
+*.pkl
+*.h5
+*.hdf5
+*.npy
+*.npz 
