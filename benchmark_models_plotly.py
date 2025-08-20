@@ -15,6 +15,8 @@ import threading
 import queue
 import cv2
 
+# Enhanced visibility: All text labels now use black color with bold weight for maximum readability
+
 # Optional TensorRT imports
 try:
     import tensorrt as trt
@@ -38,14 +40,37 @@ class ModelBenchmarkPlotly:
         self.onnx_fps = deque(maxlen=100)
         self.tensorrt_fps = deque(maxlen=100)
         
-        # Class names
-        self.class_names = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor']
+        # Class names - will be auto-detected from dataset or use defaults
+        self.class_names = self.detect_class_names()
         
         # Initialize models
         self.init_models()
         
         # Load test images
         self.test_images = self.load_test_images()
+        
+    def detect_class_names(self):
+        """Detect class names from the dataset directory structure."""
+        if self.test_images_dir and os.path.exists(self.test_images_dir):
+            # Look for subdirectories that might contain class names
+            subdirs = [d for d in os.listdir(self.test_images_dir) 
+                      if os.path.isdir(os.path.join(self.test_images_dir, d))]
+            
+            if subdirs:
+                # Clean up directory names to get class names
+                class_names = []
+                for subdir in subdirs:
+                    # Remove brackets and clean up the name
+                    class_name = subdir.replace('[', '').replace(']', '').strip()
+                    class_names.append(class_name)
+                class_names.sort()
+                print(f"🔍 Detected classes from dataset: {class_names}")
+                return class_names
+        
+        # Fallback to default brain tumor classes if no dataset structure found
+        #default_classes = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor']
+        #print(f"⚠️  Using default classes: {default_classes}")
+        #return default_classes
         
     def init_models(self):
         """Initialize ONNX and TensorRT models."""
@@ -87,17 +112,21 @@ class ModelBenchmarkPlotly:
             self.tensorrt_available = False
     
     def load_test_images(self):
-        """Load test images from directory."""
+        """Load test images from directory recursively."""
         test_images = []
         if self.test_images_dir and os.path.exists(self.test_images_dir):
-            for file in os.listdir(self.test_images_dir):
-                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    img_path = os.path.join(self.test_images_dir, file)
-                    try:
-                        img = Image.open(img_path).convert('RGB')
-                        test_images.append(img)
-                    except Exception as e:
-                        print(f"Failed to load {img_path}: {e}")
+            # Recursively search for images in subdirectories
+            for root, dirs, files in os.walk(self.test_images_dir):
+                for file in files:
+                    if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        img_path = os.path.join(root, file)
+                        try:
+                            img = Image.open(img_path).convert('RGB')
+                            test_images.append(img)
+                        except Exception as e:
+                            print(f"Failed to load {img_path}: {e}")
+        
+        print(f"📸 Loaded {len(test_images)} test images")
         
         # If no test images found, create dummy images
         if not test_images:
@@ -182,9 +211,16 @@ class ModelBenchmarkPlotly:
                     self.tensorrt_times.append(tensorrt_time)
                     self.tensorrt_fps.append(1000 / tensorrt_time if tensorrt_time > 0 else 0)
             
-            # Print progress
+            # Print progress and sample predictions
             if (i + 1) % 100 == 0:
                 print(f"Progress: {i + 1}/{self.num_iterations}")
+                # Show sample predictions every 100 iterations
+                if onnx_pred is not None:
+                    onnx_class = self.class_names[onnx_pred] if onnx_pred < len(self.class_names) else f"Class_{onnx_pred}"
+                    print(f"  📊 Sample ONNX prediction: {onnx_class}")
+                if tensorrt_pred is not None:
+                    tensorrt_class = self.class_names[tensorrt_pred] if tensorrt_pred < len(self.class_names) else f"Class_{tensorrt_pred}"
+                    print(f"  📊 Sample TensorRT prediction: {tensorrt_class}")
     
     def create_benchmark_plots(self):
         """Create comprehensive benchmark plots using Plotly."""
@@ -282,7 +318,7 @@ class ModelBenchmarkPlotly:
                 marker_color=colors,
                 text=[f'{t:.2f}ms' for t in times],
                 textposition='auto',
-                textfont=dict(size=14, color='white')
+                textfont=dict(size=14, color='black', weight='bold')
             ),
             row=2, col=1
         )
@@ -352,13 +388,13 @@ class ModelBenchmarkPlotly:
                 header=dict(
                     values=['Metric', 'ONNX'] + (['TensorRT'] if tensorrt_stats else []),
                     fill_color='#2E86AB',
-                    font=dict(color='white', size=14),
+                    font=dict(color='white', size=14, weight='bold'),
                     align='center'
                 ),
                 cells=dict(
                     values=[[row[i] for row in table_data] for i in range(len(table_data[0]))],
                     fill_color=[['#F8F9FA', '#E9ECEF'] * (len(table_data) // 2 + 1)][:len(table_data)],
-                    font=dict(size=12),
+                    font=dict(size=12, color='black'),
                     align='center'
                 )
             ),
@@ -378,7 +414,7 @@ class ModelBenchmarkPlotly:
                     marker_color=['#28A745', '#FFC107'],
                     text=[f'{speedup:.2f}x', f'{efficiency:.1f}%'],
                     textposition='auto',
-                    textfont=dict(size=14, color='white')
+                    textfont=dict(size=14, color='black', weight='bold')
                 ),
                 row=3, col=2
             )
@@ -396,7 +432,7 @@ class ModelBenchmarkPlotly:
             title=dict(
                 text='Model Performance Benchmark Comparison',
                 x=0.5,
-                font=dict(size=24, color='black')
+                font=dict(size=24, color='black', weight='bold')
             ),
             height=1200,
             width=1600,
@@ -406,20 +442,35 @@ class ModelBenchmarkPlotly:
                 yanchor="bottom",
                 y=1.02,
                 xanchor="right",
-                x=1
+                x=1,
+                font=dict(size=12, color='black')
             ),
-            font=dict(size=12)
+            font=dict(size=12, color='black'),
+            plot_bgcolor='white',
+            paper_bgcolor='white'
         )
         
-        # Update axes labels
-        fig.update_xaxes(title_text="Inference Time (ms)", row=1, col=1)
-        fig.update_yaxes(title_text="Frequency", row=1, col=1)
-        fig.update_xaxes(title_text="Inference Number", row=1, col=2)
-        fig.update_yaxes(title_text="FPS", row=1, col=2)
-        fig.update_yaxes(title_text="Average Time (ms)", row=2, col=1)
-        fig.update_xaxes(title_text="Window Position", row=2, col=2)
-        fig.update_yaxes(title_text="Moving Average Time (ms)", row=2, col=2)
-        fig.update_yaxes(title_text="Value", row=3, col=2)
+        # Update axes labels with better visibility
+        fig.update_xaxes(title_text="Inference Time (ms)", row=1, col=1, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_yaxes(title_text="Frequency", row=1, col=1, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_xaxes(title_text="Inference Number", row=1, col=2, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_yaxes(title_text="FPS", row=1, col=2, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_yaxes(title_text="Average Time (ms)", row=2, col=1, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_xaxes(title_text="Window Position", row=2, col=2, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_yaxes(title_text="Moving Average Time (ms)", row=2, col=2, title_font=dict(size=14, color='black', weight='bold'))
+        fig.update_yaxes(title_text="Value", row=3, col=2, title_font=dict(size=14, color='black', weight='bold'))
+        
+        # Update tick labels for better visibility
+        fig.update_xaxes(tickfont=dict(size=12, color='black'), row=1, col=1)
+        fig.update_yaxes(tickfont=dict(size=12, color='black'), row=1, col=1)
+        fig.update_xaxes(tickfont=dict(size=12, color='black'), row=1, col=2)
+        fig.update_yaxes(tickfont=dict(size=12, color='black'), row=1, col=2)
+        fig.update_xaxes(tickfont=dict(size=12, color='black'), row=2, col=1)
+        fig.update_yaxes(tickfont=dict(size=12, color='black'), row=2, col=1)
+        fig.update_xaxes(tickfont=dict(size=12, color='black'), row=2, col=2)
+        fig.update_yaxes(tickfont=dict(size=12, color='black'), row=2, col=2)
+        fig.update_xaxes(tickfont=dict(size=12, color='black'), row=3, col=2)
+        fig.update_yaxes(tickfont=dict(size=12, color='black'), row=3, col=2)
         
         return fig
     
@@ -463,6 +514,13 @@ class ModelBenchmarkPlotly:
             print(f"\nPerformance Comparison:")
             print(f"  - TensorRT speedup: {speedup:.2f}x")
             print(f"  - Efficiency improvement: {(speedup - 1) * 100:.1f}%")
+        
+        # Print class information
+        print(f"\n📊 Model Information:")
+        print(f"  - Number of classes: {len(self.class_names)}")
+        print(f"  - Class names: {', '.join(self.class_names)}")
+        print(f"  - Note: Predictions are based on model training (brain tumor classes)")
+        print(f"  - Dataset tested: {self.test_images_dir}")
         
         print("="*60)
 
