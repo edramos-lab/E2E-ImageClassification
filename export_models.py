@@ -11,6 +11,23 @@ import pycuda.autoinit
 import onnx
 import onnxruntime as ort
 
+"""
+Flexible Model Export Script for ONNX and TensorRT
+
+Usage Examples:
+    # Brain Tumor Classification (4 classes)
+    python export_models.py --model_path model.pth --model_name efficientnet_b0 --num_classes 4 \
+        --class_names glioma_tumor meningioma_tumor no_tumor pituitary_tumor
+    
+    # Blood Cell Classification (4 classes)
+    python export_models.py --model_path model.pth --model_name efficientnet_b0 --num_classes 4 \
+        --class_names Benign "Malignant early Pre-B" "Malignant Pre-B" "Malignant Pro-B"
+    
+    # Custom Classification (any number of classes)
+    python export_models.py --model_path model.pth --model_name resnet50 --num_classes 10 \
+        --class_names class1 class2 class3 class4 class5 class6 class7 class8 class9 class10
+"""
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Export trained models to ONNX and TensorRT formats.')
     parser.add_argument('--model_path', type=str, required=True, help='Path to the trained .pt model file')
@@ -22,6 +39,9 @@ def parse_args():
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda/cpu)')
     parser.add_argument('--fp16', action='store_true', help='Use FP16 precision for TensorRT')
     parser.add_argument('--int8', action='store_true', help='Use INT8 precision for TensorRT')
+    parser.add_argument('--class_names', type=str, nargs='+', 
+                       default=['class_0', 'class_1', 'class_2', 'class_3'],
+                       help='List of class names for the model (space-separated)')
     
     return parser.parse_args()
 
@@ -169,7 +189,7 @@ def test_tensorrt_inference(engine_path, test_image_path, class_names):
     
     # Allocate GPU memory
     input_shape = (1, 3, 224, 224)
-    output_shape = (1, 4)
+    output_shape = (1, len(class_names))
     
     d_input = cuda.mem_alloc(input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * 4)
     d_output = cuda.mem_alloc(output_shape[0] * output_shape[1] * 4)
@@ -207,8 +227,16 @@ def main():
     # Set device
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     
-    # Class names (update based on your dataset)
-    class_names = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor']
+    # Class names from command line arguments
+    class_names = args.class_names
+    print(f"📊 Using class names: {class_names}")
+    print(f"📊 Number of classes: {len(class_names)}")
+    
+    # Validate that num_classes matches the number of class names
+    if len(class_names) != args.num_classes:
+        print(f"⚠️  Warning: Number of class names ({len(class_names)}) doesn't match --num_classes ({args.num_classes})")
+        print(f"⚠️  Updating num_classes to match class names: {len(class_names)}")
+        args.num_classes = len(class_names)
     
     # Load model
     print(f"Loading model from: {args.model_path}")
