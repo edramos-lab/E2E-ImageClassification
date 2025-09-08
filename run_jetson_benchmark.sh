@@ -53,6 +53,8 @@ fi
 echo "📁 Creating directories..."
 mkdir -p models results exported_models
 
+
+
 # Build the Docker image
 echo "🔨 Building Jetson benchmarking container..."
 docker compose -f docker-compose.jetson.yml build

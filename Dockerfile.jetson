@@ -1,149 +1,82 @@
-# Dockerfile for Jetson Xavier AGX and Orin benchmarking
-# Based on NVIDIA L4T (Linux for Tegra) with Python 3.8
+# Dockerfile for Jetson Orin/Xavier (JP6 R36.4.x)
+# Base: JetPack runtime with CUDA/TensorRT from the host image
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
-FROM nvcr.io/nvidia/l4t-jetpack:r35.2.1
-
-
-# Set environment variables
+# ---- Env -----------------------------------------------------------
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
-
-# Update package lists and install system dependencies
-RUN apt-get update && apt-get install -y \
-    python3.8 \
-    python3.8-dev \
-    python3.8-venv \
-    python3.8-distutils \
-    build-essential \
-    cmake \
-    git \
-    wget \
-    curl \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    libgcc-s1 \
-    && curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o get-pip.py \
-    && python3.8 get-pip.py \
-    && rm get-pip.py \
-    && rm -rf /var/lib/apt/lists/*
-
-
-
-# Create symbolic links for Python 3.8
-RUN ln -sf /usr/bin/python3.8 /usr/bin/python3 && \
-    ln -sf /usr/bin/python3.8 /usr/bin/python
-
-# Upgrade pip
-RUN python3.8 -m pip install --upgrade pip setuptools wheel
-
-
-
-
-
-# Create working directory
 WORKDIR /workspace
 
-# Copy requirements file
-COPY requirements_jetson.txt .
-
-# Install Python dependencies
-RUN python3.8 -m pip install --no-cache-dir -r requirements_jetson.txt
-
-
-# Install PyCUDA from source (Jetson-compatible)
-# Install PyCUDA from source (Jetson-compatible)
-# Install build tools and Python dev headers
+# ---- System deps (Python 3.10) -------------------------------------
 RUN apt-get update && apt-get install -y \
-    libboost-all-dev \
-    libssl-dev \
-    libffi-dev \
-    pkg-config \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+    python3 python3-pip python3-dev python3-venv python3-distutils \
+    build-essential cmake git wget curl pkg-config \
+    libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
+    libgomp1 libboost-all-dev libssl-dev libffi-dev \
+ && rm -rf /var/lib/apt/lists/*
 
+# ---- Python deps ----------------------------------------------------
+# Usa siempre python3 / pip3 (3.10 en JP6)
+COPY requirements_jetson.txt /workspace/
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+ && python3 -m pip install --no-cache-dir -r /workspace/requirements_jetson.txt \
+ && python3 -m pip install --no-cache-dir onnx onnxruntime \
+ && python3 -m pip install --no-cache-dir \
+      plotly==5.17.0 \
+      kaleido==0.2.1 \
+      psutil==5.9.5 \
+      tqdm==4.66.1
 
-# Build PyCUDA from source using system CUDA (JetPack)
+# ---- (Opcional) PyCUDA ---------------------------------------------
+# Si realmente necesitas PyCUDA, compílalo contra CUDA del sistema.
+# Omitir si no lo usas; compilar en Orin puede tardar.
 RUN git clone https://github.com/inducer/pycuda.git /tmp/pycuda && \
     cd /tmp/pycuda && \
-    python3.8 configure.py --cuda-root=/usr/local/cuda --cudadrv-lib-dir=/usr/lib/aarch64-linux-gnu && \
-    python3.8 -m pip install . && \
+    python3 configure.py --cuda-root=/usr/local/cuda --cudadrv-lib-dir=/usr/lib/aarch64-linux-gnu && \
+    python3 -m pip install . && \
     cd / && rm -rf /tmp/pycuda
 
+# ---- Directorios de trabajo ----------------------------------------
+RUN mkdir -p /workspace/models /workspace/results /workspace/exported_models /workspace/data
 
-
-# Install TensorRT Python bindings
-# TensorRT bindings ya vienen con JetPack. Solo enlaza correctamente
-RUN ln -s /usr/lib/python3.8/dist-packages/tensorrt /usr/local/lib/python3.8/dist-packages/tensorrt
-
-
-# Install ONNX Runtime for Jetson
-RUN python3.8 -m pip install onnxruntime==1.15.1
-
-
-
-
-# Install additional dependencies for benchmarking
-RUN python3.8 -m pip install --no-cache-dir \
-    plotly==5.17.0 \
-    kaleido==0.2.1 \
-    psutil==5.9.5 \
-    tqdm==4.66.1
-
-# Copy the benchmarking scripts
-COPY benchmark_models.py .
-COPY benchmark_models_plotly.py .
-COPY run_benchmark_example.py .
-
-# Create directories for models and results
-RUN mkdir -p /workspace/models /workspace/results /workspace/exported_models
-
-# Set environment variables for TensorRT
-ENV TENSORRT_ROOT=/usr/lib/aarch64-linux-gnu
-ENV LD_LIBRARY_PATH=${TENSORRT_ROOT}:${LD_LIBRARY_PATH}
-
-# Create a script to check system information
+# ---- Info/health script (sin nvidia-smi en Jetson) -----------------
 RUN echo '#!/bin/bash\n\
 echo "=== Jetson System Information ==="\n\
-echo "Architecture: $(uname -m)"\n\
-echo "Kernel: $(uname -r)"\n\
-echo "Python version: $(python3.8 --version)"\n\
-echo "CUDA version: $(nvcc --version | grep "release" | awk "{print \$6}")"\n\
-echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits)"\n\
-echo "Memory: $(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits)"\n\
-echo "=== Python Packages ==="\n\
-python3.8 -m pip list | grep -E "(torch|tensorrt|onnx|plotly|pycuda)"\n\
-echo "=== CUDA Information ==="\n\
-python3.8 -c "import torch; print(f\"PyTorch CUDA available: {torch.cuda.is_available()}\"); print(f\"CUDA version: {torch.version.cuda}\"); print(f\"GPU count: {torch.cuda.device_count()}\")"\n\
+echo "Arch: $(uname -m)"; echo "Kernel: $(uname -r)"; echo "CUDA: $(nvcc --version 2>/dev/null | grep release || echo N/A)";\n\
+python3 --version\n\
+echo "=== Python Packages (key) ==="\n\
+python3 - <<PY\n\
+import importlib, pkgutil\n\
+mods = ["torch","tensorrt","onnx","onnxruntime","pycuda","plotly"]\n\
+for m in mods:\n\
+    spec = importlib.util.find_spec(m)\n\
+    print(f"{m}:","OK" if spec else "missing")\n\
+PY\n\
+echo "CUDA visible? (Torch)"\n\
+python3 - <<PY\n\
+try:\n\
+    import torch\n\
+    print("torch.cuda.is_available():", torch.cuda.is_available())\n\
+    print("device_count:", torch.cuda.device_count())\n\
+except Exception as e:\n\
+    print("torch not installed or failed:", e)\n\
+PY\n\
 ' > /workspace/check_system.sh && chmod +x /workspace/check_system.sh
 
-# Create entrypoint script
+# ---- Entrypoint -----------------------------------------------------
 RUN echo '#!/bin/bash\n\
 echo "=== Jetson Benchmarking Container ==="\n\
-echo "Container started successfully!"\n\
-echo "Available commands:"\n\
-echo "  - python3.8 benchmark_models.py --help"\n\
-echo "  - python3.8 benchmark_models_plotly.py --help"\n\
-echo "  - python3.8 run_benchmark_example.py"\n\
+echo "Container started. Common commands:"\n\
+echo "  - python3 export_models.py --model_path /workspace/models/model.pt --output_dir /workspace/models"\n\
+echo "  - trtexec --onnx=/workspace/models/model.onnx --saveEngine=/workspace/models/model.engine --fp16"\n\
+echo "  - python3 benchmark_models_plotly_jetson.py --onnx_path /workspace/models/model.onnx --tensorrt_path /workspace/models/model.engine --output_dir /workspace/results --num_runs 100 --batch_size 1"\n\
 echo "  - ./check_system.sh"\n\
-echo ""\n\
-echo "Example usage:"\n\
-echo "  python3.8 benchmark_models_plotly.py \\\n\
-    --onnx_path /workspace/models/model.onnx \\\n\
-    --tensorrt_path /workspace/models/model.engine \\\n\
-    --output_dir /workspace/results \\\n\
-    --num_runs 100 \\\n\
-    --batch_size 1"\n\
-echo ""\n\
 exec "$@"\n\
 ' > /workspace/entrypoint.sh && chmod +x /workspace/entrypoint.sh
 
-# Set the entrypoint
 ENTRYPOINT ["/workspace/entrypoint.sh"]
-CMD ["bash"] 
+CMD ["bash"]
+
