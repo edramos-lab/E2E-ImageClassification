@@ -536,7 +536,7 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(train_subset, train_target
     # Reiniciar el modelo y optimizador para cada pliegue
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=False)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     num_epochs = 10
     train_confusion_matrices = []
