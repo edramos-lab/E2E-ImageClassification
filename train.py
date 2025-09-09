@@ -321,7 +321,7 @@ def main():
             
             # Initialize optimizer, scheduler and criterion
             optimizer = optim.Adam(model.parameters(), lr=args.lr)
-                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
             criterion = nn.CrossEntropyLoss()
             
             # Training loop
