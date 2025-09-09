@@ -373,6 +373,7 @@ def main():
                 # Save best model
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
+                    model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
@@ -380,7 +381,11 @@ def main():
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, f'best_model_{args.model}_fold_{fold + 1}.pt')
+                    }, model_path)
+                    
+                    # Save model to wandb
+                    wandb.save(model_path)
+                    print(f"Model saved to wandb: {model_path}")
             
             # === Testing Phase ===
             print(f"\nTesting on Fold {fold + 1}...")
@@ -505,6 +510,20 @@ def main():
                     activations = register_hooks(model)
                     grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                     show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
+            
+            # Save final model for this fold to wandb
+            final_model_path = f'final_model_{args.model}_fold_{fold + 1}.pt'
+            torch.save({
+                'epoch': args.epochs,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'test_acc': test_acc,
+                'test_f1': test_f1,
+                'test_mcc': test_mcc,
+                'class_names': class_names
+            }, final_model_path)
+            wandb.save(final_model_path)
+            print(f"Final model saved to wandb: {final_model_path}")
             
             # Finish wandb run for this fold
             wandb.finish()
@@ -603,6 +622,7 @@ def main():
                 # Save best model
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
+                    model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
@@ -610,7 +630,11 @@ def main():
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, f'best_model_{args.model}_fold_{fold + 1}.pth')
+                    }, model_path)
+                    
+                    # Save model to wandb
+                    wandb.save(model_path)
+                    print(f"Model saved to wandb: {model_path}")
             
             # === Testing Phase ===
             print(f"\nTesting on Fold {fold + 1}...")
@@ -735,6 +759,20 @@ def main():
                     activations = register_hooks(model)
                     grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                     show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
+            
+            # Save final model for this fold to wandb
+            final_model_path = f'final_model_{args.model}_fold_{fold + 1}.pth'
+            torch.save({
+                'epoch': args.epochs,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'test_acc': test_acc,
+                'test_f1': test_f1,
+                'test_mcc': test_mcc,
+                'class_names': class_names
+            }, final_model_path)
+            wandb.save(final_model_path)
+            print(f"Final model saved to wandb: {final_model_path}")
             
             # Finish wandb run for this fold
             wandb.finish()
