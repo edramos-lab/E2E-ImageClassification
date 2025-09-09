@@ -41,6 +41,8 @@ python train.py \
     --use_stratified True
 ```
 
+**Note**: The script automatically detects whether your dataset uses `Training/Testing` or `train/test` folder structure.
+
 ### Command Line Arguments
 
 - `--dataset_dir`: Path to dataset directory
@@ -181,6 +183,9 @@ Supported models from `timm`:
 - And many more...
 
 ### Dataset Structure
+The project supports both folder naming conventions:
+
+**Option 1: Training/Testing**
 ```
 dataset/
 ├── Training/
@@ -189,6 +194,21 @@ dataset/
 │   ├── pituitary_tumor/
 │   └── no_tumor/
 └── Testing/
+    ├── glioma_tumor/
+    ├── meningioma_tumor/
+    ├── pituitary_tumor/
+    └── no_tumor/
+```
+
+**Option 2: train/test**
+```
+dataset/
+├── train/
+│   ├── glioma_tumor/
+│   ├── meningioma_tumor/
+│   ├── pituitary_tumor/
+│   └── no_tumor/
+└── test/
     ├── glioma_tumor/
     ├── meningioma_tumor/
     ├── pituitary_tumor/

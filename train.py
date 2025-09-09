@@ -33,14 +33,23 @@ def parse_args():
 
 def get_class_names(dataset_dir):
     """
-    Get class names from the dataset directory structure
+    Get class names from the dataset directory structure.
+    Supports both 'Training' and 'train' folder naming conventions.
     Args:
         dataset_dir: Path to the dataset directory
     Returns:
         class_names: List of class names
     """
-    # Get the training directory
-    train_dir = os.path.join(dataset_dir, 'Training')
+    # Check for both 'Training' and 'train' folder structures
+    train_dir = None
+    for folder_name in ['Training', 'train']:
+        potential_train_dir = os.path.join(dataset_dir, folder_name)
+        if os.path.exists(potential_train_dir):
+            train_dir = potential_train_dir
+            break
+    
+    if train_dir is None:
+        raise ValueError(f"Neither 'Training' nor 'train' folder found in {dataset_dir}")
     
     # Get all subdirectories (class folders)
     class_names = [d for d in os.listdir(train_dir) 
@@ -241,10 +250,15 @@ def main():
     # Get transforms
     train_transform, test_transform = get_transforms()
     
-    # Setup dataset paths
+    # Setup dataset paths - support both 'Training/Testing' and 'train/test' conventions
     base_dir = args.dataset_dir
-    train_dir = os.path.join(base_dir, 'Training')
-    test_dir = os.path.join(base_dir, 'Testing')
+    
+    # Determine folder naming convention
+    train_folder = 'Training' if os.path.exists(os.path.join(base_dir, 'Training')) else 'train'
+    test_folder = 'Testing' if os.path.exists(os.path.join(base_dir, 'Testing')) else 'test'
+    
+    train_dir = os.path.join(base_dir, train_folder)
+    test_dir = os.path.join(base_dir, test_folder)
     
     # Create datasets using class names
     train_dataset = CustomDataset(
