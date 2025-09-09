@@ -11,7 +11,7 @@ import os
 def run_benchmark_example():
     """Run the benchmark with example parameters."""
     
-    print("🚀 Brain Cancer Model Benchmarking Examples")
+    print("🚀 E2E Image Classification Model Benchmarking Examples")
     print("=" * 50)
     
     # Example 1: Basic ONNX benchmark
@@ -150,7 +150,7 @@ def check_dependencies():
 def main():
     """Main function to run the benchmark examples."""
     
-    print("🧠 Brain Cancer Model Benchmarking Tool")
+    print("🧠 E2E Image Classification Model Benchmarking Tool")
     print("=" * 40)
     
     # Check dependencies first

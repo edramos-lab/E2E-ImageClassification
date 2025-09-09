@@ -1,10 +1,10 @@
-# Brain Cancer Multi-Class Classification
+# E2E Image Classification
 
-A comprehensive deep learning project for brain tumor classification using PyTorch, featuring advanced training, evaluation, and deployment capabilities.
+A comprehensive end-to-end deep learning project for image classification using PyTorch, featuring advanced training, evaluation, and deployment capabilities.
 
 ## 🚀 Features
 
-- **Multi-class Classification**: Supports 4 tumor types (Glioma, Meningioma, Pituitary, No Tumor)
+- **Multi-class Classification**: Supports multiple image classification tasks with flexible dataset structure
 - **Advanced Models**: Swin Transformer, ConvNeXt, and other SOTA architectures
 - **Cross-Validation**: K-Fold and Stratified K-Fold options
 - **Learning Rate Scheduling**: ReduceLROnPlateau with configurable parameters
@@ -53,7 +53,7 @@ python train.py \
 - `--k_folds`: Number of K-fold splits (default: 5)
 - `--use_stratified`: Use StratifiedKFold if True, KFold if False (default: True)
 - `--dataset_ratio`: Dataset split ratio (default: 0.8)
-- `--project_name`: Weights & Biases project name (default: brain-cancer-classification)
+- `--project_name`: Weights & Biases project name (default: e2e-image-classification)
 
 ## 📊 Visualization
 
