@@ -405,7 +405,7 @@ def main():
                 print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
                 print('--------------------------------')
                 
-                # Save best model
+                # Save best model locally (don't upload to wandb yet)
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
@@ -417,10 +417,14 @@ def main():
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
                     }, best_model_path)
-                    
-                    # Save model to wandb
-                    wandb.save(best_model_path)
-                    print(f"Best model saved to wandb: {best_model_path} (Val Acc: {val_acc:.4f})")
+                    print(f"Best model saved locally: {best_model_path} (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
+            
+            # Save best model to wandb after final epoch
+            if best_model_path and os.path.exists(best_model_path):
+                wandb.save(best_model_path)
+                print(f"Best model saved to wandb: {best_model_path}")
+            else:
+                print(f"Warning: No best model found to save to wandb for fold {fold + 1}")
             
             # === Testing Phase ===
             # Load the best model for testing
@@ -556,8 +560,8 @@ def main():
                     grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                     show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
             
-            # Save final model for this fold to wandb (using best model)
-            final_model_path = f'final_model_{args.model}_fold_{fold + 1}.pt'
+            # Save test results model with test metrics (using best model)
+            test_results_path = f'test_results_{args.model}_fold_{fold + 1}.pt'
             best_epoch = checkpoint['epoch'] if checkpoint is not None else args.epochs - 1
             torch.save({
                 'epoch': best_epoch,
@@ -570,9 +574,9 @@ def main():
                 'test_f1': test_f1,
                 'test_mcc': test_mcc,
                 'class_names': class_names
-            }, final_model_path)
-            wandb.save(final_model_path)
-            print(f"Final model (best) saved to wandb: {final_model_path}")
+            }, test_results_path)
+            wandb.save(test_results_path)
+            print(f"Test results model saved to wandb: {test_results_path}")
             
             # Finish wandb run for this fold
             wandb.finish()
@@ -669,7 +673,7 @@ def main():
                 print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
                 print('--------------------------------')
                 
-                # Save best model
+                # Save best model locally (don't upload to wandb yet)
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
@@ -681,10 +685,14 @@ def main():
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
                     }, best_model_path)
-                    
-                    # Save model to wandb
-                    wandb.save(best_model_path)
-                    print(f"Best model saved to wandb: {best_model_path} (Val Acc: {val_acc:.4f})")
+                    print(f"Best model saved locally: {best_model_path} (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
+            
+            # Save best model to wandb after final epoch
+            if best_model_path and os.path.exists(best_model_path):
+                wandb.save(best_model_path)
+                print(f"Best model saved to wandb: {best_model_path}")
+            else:
+                print(f"Warning: No best model found to save to wandb for fold {fold + 1}")
             
             # === Testing Phase ===
             # Load the best model for testing
@@ -820,8 +828,8 @@ def main():
                     grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                     show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
             
-            # Save final model for this fold to wandb (using best model)
-            final_model_path = f'final_model_{args.model}_fold_{fold + 1}.pth'
+            # Save test results model with test metrics (using best model)
+            test_results_path = f'test_results_{args.model}_fold_{fold + 1}.pth'
             best_epoch = checkpoint['epoch'] if checkpoint is not None else args.epochs - 1
             torch.save({
                 'epoch': best_epoch,
@@ -834,9 +842,9 @@ def main():
                 'test_f1': test_f1,
                 'test_mcc': test_mcc,
                 'class_names': class_names
-            }, final_model_path)
-            wandb.save(final_model_path)
-            print(f"Final model (best) saved to wandb: {final_model_path}")
+            }, test_results_path)
+            wandb.save(test_results_path)
+            print(f"Test results model saved to wandb: {test_results_path}")
             
             # Finish wandb run for this fold
             wandb.finish()
