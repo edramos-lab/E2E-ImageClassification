@@ -35,12 +35,29 @@ def get_class_names(dataset_dir):
     """
     Get class names from the dataset directory structure.
     Supports both 'Training' and 'train' folder naming conventions.
+    Also supports when dataset_dir points directly to a train folder.
     Args:
         dataset_dir: Path to the dataset directory
     Returns:
         class_names: List of class names
     """
-    # Check for both 'Training' and 'train' folder structures
+    # First, check if the dataset_dir itself contains class folders directly
+    # This handles the case where dataset_dir points to /content/dataset/train
+    direct_class_folders = [d for d in os.listdir(dataset_dir) 
+                           if os.path.isdir(os.path.join(dataset_dir, d))]
+    
+    # If we find directories and they don't look like 'Training'/'train'/'Testing'/'test' folders,
+    # assume they are class folders
+    excluded_folders = ['Training', 'train', 'Testing', 'test']
+    valid_class_folders = [d for d in direct_class_folders if d not in excluded_folders]
+    
+    if valid_class_folders:
+        # Sort to ensure consistent order
+        valid_class_folders.sort()
+        return valid_class_folders
+    
+    # Otherwise, check for nested 'Training' and 'train' folder structures
+    # This handles the case where dataset_dir points to /content/dataset
     train_dir = None
     for folder_name in ['Training', 'train']:
         potential_train_dir = os.path.join(dataset_dir, folder_name)
@@ -49,7 +66,8 @@ def get_class_names(dataset_dir):
             break
     
     if train_dir is None:
-        raise ValueError(f"Neither 'Training' nor 'train' folder found in {dataset_dir}")
+        raise ValueError(f"Neither 'Training' nor 'train' folder found in {dataset_dir}, "
+                        f"and no class folders found directly in {dataset_dir}")
     
     # Get all subdirectories (class folders)
     class_names = [d for d in os.listdir(train_dir) 
@@ -251,14 +269,30 @@ def main():
     train_transform, test_transform = get_transforms()
     
     # Setup dataset paths - support both 'Training/Testing' and 'train/test' conventions
+    # Also support when dataset_dir points directly to a train folder
     base_dir = args.dataset_dir
     
-    # Determine folder naming convention
-    train_folder = 'Training' if os.path.exists(os.path.join(base_dir, 'Training')) else 'train'
-    test_folder = 'Testing' if os.path.exists(os.path.join(base_dir, 'Testing')) else 'test'
+    # Check if dataset_dir contains class folders directly (e.g., /content/dataset/train)
+    direct_class_folders = [d for d in os.listdir(base_dir) 
+                           if os.path.isdir(os.path.join(base_dir, d))]
+    excluded_folders = ['Training', 'train', 'Testing', 'test']
+    valid_class_folders = [d for d in direct_class_folders if d not in excluded_folders]
     
-    train_dir = os.path.join(base_dir, train_folder)
-    test_dir = os.path.join(base_dir, test_folder)
+    if valid_class_folders:
+        # dataset_dir points directly to train folder, class folders are directly inside
+        train_dir = base_dir
+        # Look for test folder in parent directory
+        parent_dir = os.path.dirname(base_dir)
+        test_folder = 'Testing' if os.path.exists(os.path.join(parent_dir, 'Testing')) else 'test'
+        test_dir = os.path.join(parent_dir, test_folder)
+    else:
+        # dataset_dir points to parent directory with nested structure
+        # Determine folder naming convention
+        train_folder = 'Training' if os.path.exists(os.path.join(base_dir, 'Training')) else 'train'
+        test_folder = 'Testing' if os.path.exists(os.path.join(base_dir, 'Testing')) else 'test'
+        
+        train_dir = os.path.join(base_dir, train_folder)
+        test_dir = os.path.join(base_dir, test_folder)
     
     # Create datasets using class names
     train_dataset = CustomDataset(
@@ -326,6 +360,7 @@ def main():
             
             # Training loop
             best_val_acc = 0.0
+            best_model_path = None
             for epoch in range(args.epochs):
                 # Training phase
                 train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
@@ -373,7 +408,7 @@ def main():
                 # Save best model
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
-                    model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
+                    best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
@@ -381,13 +416,23 @@ def main():
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, model_path)
+                    }, best_model_path)
                     
                     # Save model to wandb
-                    wandb.save(model_path)
-                    print(f"Model saved to wandb: {model_path}")
+                    wandb.save(best_model_path)
+                    print(f"Best model saved to wandb: {best_model_path} (Val Acc: {val_acc:.4f})")
             
             # === Testing Phase ===
+            # Load the best model for testing
+            checkpoint = None
+            if best_model_path and os.path.exists(best_model_path):
+                print(f"\nLoading best model from {best_model_path} for testing...")
+                checkpoint = torch.load(best_model_path, map_location=device)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                print(f"Best model loaded (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
+            else:
+                print(f"\nWarning: Best model checkpoint not found. Using final epoch model for testing.")
+            
             print(f"\nTesting on Fold {fold + 1}...")
             model.eval()
             all_preds = []
@@ -511,19 +556,23 @@ def main():
                     grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                     show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
             
-            # Save final model for this fold to wandb
+            # Save final model for this fold to wandb (using best model)
             final_model_path = f'final_model_{args.model}_fold_{fold + 1}.pt'
+            best_epoch = checkpoint['epoch'] if checkpoint is not None else args.epochs - 1
             torch.save({
-                'epoch': args.epochs,
+                'epoch': best_epoch,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                'optimizer_state_dict': checkpoint['optimizer_state_dict'] if checkpoint is not None else None,
+                'val_acc': checkpoint['val_acc'] if checkpoint is not None else None,
+                'val_f1': checkpoint['val_f1'] if checkpoint is not None else None,
+                'val_mcc': checkpoint['val_mcc'] if checkpoint is not None else None,
                 'test_acc': test_acc,
                 'test_f1': test_f1,
                 'test_mcc': test_mcc,
                 'class_names': class_names
             }, final_model_path)
             wandb.save(final_model_path)
-            print(f"Final model saved to wandb: {final_model_path}")
+            print(f"Final model (best) saved to wandb: {final_model_path}")
             
             # Finish wandb run for this fold
             wandb.finish()
@@ -575,6 +624,7 @@ def main():
             
             # Training loop
             best_val_acc = 0.0
+            best_model_path = None
             for epoch in range(args.epochs):
                 # Training phase
                 train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
@@ -622,7 +672,7 @@ def main():
                 # Save best model
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
-                    model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
+                    best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
@@ -630,13 +680,23 @@ def main():
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, model_path)
+                    }, best_model_path)
                     
                     # Save model to wandb
-                    wandb.save(model_path)
-                    print(f"Model saved to wandb: {model_path}")
+                    wandb.save(best_model_path)
+                    print(f"Best model saved to wandb: {best_model_path} (Val Acc: {val_acc:.4f})")
             
             # === Testing Phase ===
+            # Load the best model for testing
+            checkpoint = None
+            if best_model_path and os.path.exists(best_model_path):
+                print(f"\nLoading best model from {best_model_path} for testing...")
+                checkpoint = torch.load(best_model_path, map_location=device)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                print(f"Best model loaded (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
+            else:
+                print(f"\nWarning: Best model checkpoint not found. Using final epoch model for testing.")
+            
             print(f"\nTesting on Fold {fold + 1}...")
             model.eval()
             all_preds = []
@@ -760,19 +820,23 @@ def main():
                     grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
                     show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
             
-            # Save final model for this fold to wandb
+            # Save final model for this fold to wandb (using best model)
             final_model_path = f'final_model_{args.model}_fold_{fold + 1}.pth'
+            best_epoch = checkpoint['epoch'] if checkpoint is not None else args.epochs - 1
             torch.save({
-                'epoch': args.epochs,
+                'epoch': best_epoch,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                'optimizer_state_dict': checkpoint['optimizer_state_dict'] if checkpoint is not None else None,
+                'val_acc': checkpoint['val_acc'] if checkpoint is not None else None,
+                'val_f1': checkpoint['val_f1'] if checkpoint is not None else None,
+                'val_mcc': checkpoint['val_mcc'] if checkpoint is not None else None,
                 'test_acc': test_acc,
                 'test_f1': test_f1,
                 'test_mcc': test_mcc,
                 'class_names': class_names
             }, final_model_path)
             wandb.save(final_model_path)
-            print(f"Final model saved to wandb: {final_model_path}")
+            print(f"Final model (best) saved to wandb: {final_model_path}")
             
             # Finish wandb run for this fold
             wandb.finish()
