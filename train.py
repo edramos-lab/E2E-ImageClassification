@@ -137,7 +137,14 @@ def register_last_conv(model):
 
 
 def grad_cam(model, img, class_idx, activations, device):
-    img = img.to(device).unsqueeze(0)  # Ensure batch dimension
+    img = img.to(device)
+    # Ensure batch dimension (handle both batched and unbatched inputs)
+    if img.dim() == 3:
+        img = img.unsqueeze(0)
+    elif img.dim() == 4:
+        # Already has batch dimension, but might need to take first item if batch > 1
+        if img.shape[0] > 1:
+            img = img[0:1]  # Take only first image
     img.requires_grad = True
 
     # Clear previous gradients
