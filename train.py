@@ -436,6 +436,7 @@ def main():
                 model.load_state_dict(best_model_state)
                 checkpoint = {
                     'epoch': best_epoch,
+                    'optimizer_state_dict': optimizer.state_dict(),
                     'val_acc': best_val_metrics['val_acc'],
                     'val_f1': best_val_metrics['val_f1'],
                     'val_mcc': best_val_metrics['val_mcc']
@@ -718,6 +719,7 @@ def main():
                 model.load_state_dict(best_model_state)
                 checkpoint = {
                     'epoch': best_epoch,
+                    'optimizer_state_dict': optimizer.state_dict(),
                     'val_acc': best_val_metrics['val_acc'],
                     'val_f1': best_val_metrics['val_f1'],
                     'val_mcc': best_val_metrics['val_mcc']
