@@ -360,7 +360,9 @@ def main():
             
             # Training loop
             best_val_acc = 0.0
-            best_model_path = None
+            best_model_state = None
+            best_epoch = 0
+            best_val_metrics = {}
             for epoch in range(args.epochs):
                 # Training phase
                 train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
@@ -405,37 +407,49 @@ def main():
                 print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
                 print('--------------------------------')
                 
-                # Save best model locally (don't upload to wandb yet)
+                # Track best model state in memory
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
-                    best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
-                    torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
+                    best_epoch = epoch
+                    best_model_state = model.state_dict().copy()
+                    best_val_metrics = {
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, best_model_path)
-                    print(f"Best model saved locally: {best_model_path} (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
+                    }
+                    print(f"New best model found (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
             
             # Save best model to wandb after final epoch
-            if best_model_path and os.path.exists(best_model_path):
+            if best_model_state is not None:
+                best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
+                torch.save({
+                    'epoch': best_epoch,
+                    'model_state_dict': best_model_state,
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'val_acc': best_val_metrics['val_acc'],
+                    'val_f1': best_val_metrics['val_f1'],
+                    'val_mcc': best_val_metrics['val_mcc']
+                }, best_model_path)
                 wandb.save(best_model_path)
-                print(f"Best model saved to wandb: {best_model_path}")
+                print(f"Best model saved to wandb: {best_model_path} (Val Acc: {best_val_metrics['val_acc']:.4f}, Epoch: {best_epoch + 1})")
+                # Load best model for testing
+                model.load_state_dict(best_model_state)
+                checkpoint = {
+                    'epoch': best_epoch,
+                    'val_acc': best_val_metrics['val_acc'],
+                    'val_f1': best_val_metrics['val_f1'],
+                    'val_mcc': best_val_metrics['val_mcc']
+                }
             else:
-                print(f"Warning: No best model found to save to wandb for fold {fold + 1}")
+                print(f"Warning: No best model found for fold {fold + 1}")
+                checkpoint = None
             
             # === Testing Phase ===
-            # Load the best model for testing
-            checkpoint = None
-            if best_model_path and os.path.exists(best_model_path):
-                print(f"\nLoading best model from {best_model_path} for testing...")
-                checkpoint = torch.load(best_model_path, map_location=device)
-                model.load_state_dict(checkpoint['model_state_dict'])
-                print(f"Best model loaded (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
+            # Use best model for testing (already loaded above)
+            if checkpoint is not None:
+                print(f"\nUsing best model for testing (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
             else:
-                print(f"\nWarning: Best model checkpoint not found. Using final epoch model for testing.")
+                print(f"\nWarning: Using final epoch model for testing.")
             
             print(f"\nTesting on Fold {fold + 1}...")
             model.eval()
@@ -628,7 +642,9 @@ def main():
             
             # Training loop
             best_val_acc = 0.0
-            best_model_path = None
+            best_model_state = None
+            best_epoch = 0
+            best_val_metrics = {}
             for epoch in range(args.epochs):
                 # Training phase
                 train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
@@ -673,37 +689,49 @@ def main():
                 print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
                 print('--------------------------------')
                 
-                # Save best model locally (don't upload to wandb yet)
+                # Track best model state in memory
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
-                    best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
-                    torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
+                    best_epoch = epoch
+                    best_model_state = model.state_dict().copy()
+                    best_val_metrics = {
                         'val_acc': val_acc,
                         'val_f1': val_f1,
                         'val_mcc': val_mcc
-                    }, best_model_path)
-                    print(f"Best model saved locally: {best_model_path} (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
+                    }
+                    print(f"New best model found (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
             
             # Save best model to wandb after final epoch
-            if best_model_path and os.path.exists(best_model_path):
+            if best_model_state is not None:
+                best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
+                torch.save({
+                    'epoch': best_epoch,
+                    'model_state_dict': best_model_state,
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'val_acc': best_val_metrics['val_acc'],
+                    'val_f1': best_val_metrics['val_f1'],
+                    'val_mcc': best_val_metrics['val_mcc']
+                }, best_model_path)
                 wandb.save(best_model_path)
-                print(f"Best model saved to wandb: {best_model_path}")
+                print(f"Best model saved to wandb: {best_model_path} (Val Acc: {best_val_metrics['val_acc']:.4f}, Epoch: {best_epoch + 1})")
+                # Load best model for testing
+                model.load_state_dict(best_model_state)
+                checkpoint = {
+                    'epoch': best_epoch,
+                    'val_acc': best_val_metrics['val_acc'],
+                    'val_f1': best_val_metrics['val_f1'],
+                    'val_mcc': best_val_metrics['val_mcc']
+                }
             else:
-                print(f"Warning: No best model found to save to wandb for fold {fold + 1}")
+                print(f"Warning: No best model found for fold {fold + 1}")
+                checkpoint = None
             
             # === Testing Phase ===
-            # Load the best model for testing
-            checkpoint = None
-            if best_model_path and os.path.exists(best_model_path):
-                print(f"\nLoading best model from {best_model_path} for testing...")
-                checkpoint = torch.load(best_model_path, map_location=device)
-                model.load_state_dict(checkpoint['model_state_dict'])
-                print(f"Best model loaded (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
+            # Use best model for testing (already loaded above)
+            if checkpoint is not None:
+                print(f"\nUsing best model for testing (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
             else:
-                print(f"\nWarning: Best model checkpoint not found. Using final epoch model for testing.")
+                print(f"\nWarning: Using final epoch model for testing.")
             
             print(f"\nTesting on Fold {fold + 1}...")
             model.eval()
