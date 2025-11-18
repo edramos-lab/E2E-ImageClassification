@@ -119,32 +119,52 @@ def register_last_conv(model):
         raise ValueError("No Conv2d layer found for GradCAM")
 
     activations = {}
+    gradients = []
 
-    def hook_fn(module, input, output):
-        activations["value"] = output.detach()
+    def forward_hook(module, input, output):
+        activations["value"] = output
 
-    target_layer.register_forward_hook(hook_fn)
+    def backward_hook(module, grad_input, grad_output):
+        if grad_output[0] is not None:
+            gradients.append(grad_output[0])
+
+    target_layer.register_forward_hook(forward_hook)
+    target_layer.register_full_backward_hook(backward_hook)
+    
+    activations["layer"] = target_layer
+    activations["gradients"] = gradients
     return activations
 
 
 def grad_cam(model, img, class_idx, activations, device):
-    img = img.to(device)
+    img = img.to(device).unsqueeze(0)  # Ensure batch dimension
     img.requires_grad = True
 
+    # Clear previous gradients
+    activations["gradients"].clear()
+
+    # Forward pass
     out = model(img)
-    grad_target = torch.zeros_like(out)
-    grad_target[0, class_idx] = 1
-
+    fmap = activations["value"]  # Feature map from forward hook
+    
+    # Backward pass for the target class
     model.zero_grad()
-    out.backward(grad_target)
+    out[0, class_idx].backward()
 
-    fmap = activations["value"]
-    grads = img.grad
+    # Get gradients (should have same shape as feature map)
+    grads = activations["gradients"][0] if activations["gradients"] else None
+    
+    if grads is None:
+        # Fallback: use feature map directly (no gradients available)
+        cam = fmap.mean(dim=1).squeeze()
+    else:
+        # Compute weights: average gradients spatially (one weight per channel)
+        weights = grads.mean(dim=(2, 3), keepdim=True)  # [1, C, 1, 1]
+        # Weighted combination of feature map channels
+        cam = (weights * fmap).sum(dim=1).squeeze()  # [H, W]
 
-    weights = grads.mean(dim=(2, 3), keepdim=True)
-    cam = (weights * fmap).sum(dim=1).squeeze()
-
-    cam = cam.cpu().numpy()
+    # Post-process
+    cam = cam.cpu().detach().numpy()
     cam = np.maximum(cam, 0)
     cam /= cam.max() + 1e-6
     cam = cv2.resize(cam, (224, 224))
@@ -165,7 +185,7 @@ def train_epoch(model, loader, criterion, optimizer, device, scaler):
 
         optimizer.zero_grad()
 
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast('cuda'):
             out = model(imgs)
             loss = criterion(out, lbls)
 
@@ -358,7 +378,7 @@ def main():
 
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
         criterion = nn.CrossEntropyLoss()
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler('cuda')
 
         activations = register_last_conv(model)
 
