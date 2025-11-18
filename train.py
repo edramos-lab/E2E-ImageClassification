@@ -5,879 +5,381 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import timm
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-import wandb
-from sklearn.model_selection import StratifiedKFold, KFold
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef, confusion_matrix
-import matplotlib.pyplot as plt
-import seaborn as sns
 from PIL import Image
 import cv2
-import torch.nn.functional as F
-from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    roc_curve,
+    auc
+)
+import wandb
+
+# =====================================================================
+# ARGUMENTOS
+# =====================================================================
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train a model on the dataset.')
-    parser.add_argument('--project_name', type=str, default='e2e-image-classification', help='WandB project name')
-    parser.add_argument('--dataset_dir', type=str, required=True, help='Directory of the dataset')
-    parser.add_argument('--model', type=str, default='efficientnet_b0', help='Model name')
-    parser.add_argument('--batch', type=int, default=32, help='Batch size')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
-    parser.add_argument('--dataset_ratio', type=float, default=0.3, help='Ratio of the dataset to use for training and testing')
-    parser.add_argument('--k_folds', type=int, default=3, help='Number of k-folds for cross-validation')
-    parser.add_argument('--use_stratified', type=bool, default=True, help='Whether to use StratifiedKFold (True) or KFold (False)')
-    
+    parser = argparse.ArgumentParser(description="Fast Training (A100 Optimized)")
+    parser.add_argument("--dataset_dir", type=str, required=True)
+    parser.add_argument("--model", type=str, default="efficientnet_b0")
+    parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--k_folds", type=int, default=3)
+    parser.add_argument("--project", type=str, default="e2e-folds")
     return parser.parse_args()
 
+
+# =====================================================================
+# DATASET
+# =====================================================================
+
 def get_class_names(dataset_dir):
-    """
-    Get class names from the dataset directory structure.
-    Supports both 'Training' and 'train' folder naming conventions.
-    Also supports when dataset_dir points directly to a train folder.
-    Args:
-        dataset_dir: Path to the dataset directory
-    Returns:
-        class_names: List of class names
-    """
-    # First, check if the dataset_dir itself contains class folders directly
-    # This handles the case where dataset_dir points to /content/dataset/train
-    direct_class_folders = [d for d in os.listdir(dataset_dir) 
-                           if os.path.isdir(os.path.join(dataset_dir, d))]
-    
-    # If we find directories and they don't look like 'Training'/'train'/'Testing'/'test' folders,
-    # assume they are class folders
-    excluded_folders = ['Training', 'train', 'Testing', 'test']
-    valid_class_folders = [d for d in direct_class_folders if d not in excluded_folders]
-    
-    if valid_class_folders:
-        # Sort to ensure consistent order
-        valid_class_folders.sort()
-        return valid_class_folders
-    
-    # Otherwise, check for nested 'Training' and 'train' folder structures
-    # This handles the case where dataset_dir points to /content/dataset
-    train_dir = None
-    for folder_name in ['Training', 'train']:
-        potential_train_dir = os.path.join(dataset_dir, folder_name)
-        if os.path.exists(potential_train_dir):
-            train_dir = potential_train_dir
-            break
-    
-    if train_dir is None:
-        raise ValueError(f"Neither 'Training' nor 'train' folder found in {dataset_dir}, "
-                        f"and no class folders found directly in {dataset_dir}")
-    
-    # Get all subdirectories (class folders)
-    class_names = [d for d in os.listdir(train_dir) 
-                  if os.path.isdir(os.path.join(train_dir, d))]
-    
-    # Sort to ensure consistent order
-    class_names.sort()
-    
-    return class_names
+    classes = [d for d in os.listdir(dataset_dir)
+               if os.path.isdir(os.path.join(dataset_dir, d))]
+    classes.sort()
+    return classes
+
 
 class CustomDataset(Dataset):
-    def __init__(self, base_dir, class_names, transform=None):
-        self.base_dir = base_dir
-        self.class_names = class_names
+    def __init__(self, base_dir, class_names, transform):
         self.transform = transform
         self.images = []
         self.labels = []
-        self._load_images()
 
-    def _load_images(self):
-        for class_idx, class_name in enumerate(self.class_names):
-            class_dir = os.path.join(self.base_dir, class_name)
-            for img_name in os.listdir(class_dir):
-                img_path = os.path.join(class_dir, img_name)
-                self.images.append(img_path)
-                self.labels.append(class_idx)
+        for idx, cls in enumerate(class_names):
+            cdir = os.path.join(base_dir, cls)
+            for img in os.listdir(cdir):
+                self.images.append(os.path.join(cdir, img))
+                self.labels.append(idx)
 
     def __len__(self):
         return len(self.images)
 
     def __getitem__(self, idx):
-        img_path = self.images[idx]
-        img = Image.open(img_path).convert("RGB")
-        label = self.labels[idx]
+        img = Image.open(self.images[idx]).convert("RGB")
+        return self.transform(img), self.labels[idx]
 
-        if self.transform:
-            img = self.transform(img)
-
-        return img, label
 
 def get_transforms():
-    train_transform = transforms.Compose([
+    train_tf = transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        transforms.RandomRotation(45),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(20),
         transforms.ToTensor()
     ])
-
-    test_transform = transforms.Compose([
+    test_tf = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
+    return train_tf, test_tf
 
-    return train_transform, test_transform
 
-def train_epoch(model, train_loader, criterion, optimizer, device):
-    model.train()
-    running_loss = 0.0
-    all_preds = []
-    all_labels = []
+# =====================================================================
+# GRAD-CAM UTILITIES
+# =====================================================================
 
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+def register_last_conv(model):
+    target_layer = None
+    for name, m in model.named_modules():
+        if isinstance(m, torch.nn.Conv2d):
+            target_layer = m
 
-        running_loss += loss.item()
-        
-        _, preds = torch.max(outputs, 1)
-        all_preds.extend(preds.cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
+    if target_layer is None:
+        raise ValueError("No Conv2d layer found for GradCAM")
 
-    epoch_loss = running_loss / len(train_loader)
-    epoch_acc = accuracy_score(all_labels, all_preds)
-    epoch_precision = precision_score(all_labels, all_preds, average='weighted')
-    epoch_recall = recall_score(all_labels, all_preds, average='weighted')
-    epoch_f1 = f1_score(all_labels, all_preds, average='weighted')
-    epoch_mcc = matthews_corrcoef(all_labels, all_preds)
-    
-    return epoch_loss, epoch_acc, epoch_precision, epoch_recall, epoch_f1, epoch_mcc
-
-def validate(model, val_loader, criterion, device):
-    model.eval()
-    running_loss = 0.0
-    all_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-
-            running_loss += loss.item()
-            
-            _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-
-    val_loss = running_loss / len(val_loader)
-    val_acc = accuracy_score(all_labels, all_preds)
-    val_precision = precision_score(all_labels, all_preds, average='weighted')
-    val_recall = recall_score(all_labels, all_preds, average='weighted')
-    val_f1 = f1_score(all_labels, all_preds, average='weighted')
-    val_mcc = matthews_corrcoef(all_labels, all_preds)
-    
-    return val_loss, val_acc, val_precision, val_recall, val_f1, val_mcc
-
-def register_hooks(model):
     activations = {}
 
-    def save_activation(name):
-        def hook(module, input, output):
-            activations[name] = output.detach()
-        return hook
+    def hook_fn(module, input, output):
+        activations["value"] = output.detach()
 
-    # Find the last convolutional layer
-    last_conv_layer = None
-    for name, layer in model.named_modules():
-        if isinstance(layer, torch.nn.Conv2d):
-            last_conv_layer = layer
-
-    if last_conv_layer is None:
-        raise ValueError("No convolutional layer found in the model.")
-
-    last_conv_layer.register_forward_hook(save_activation('last_conv'))
+    target_layer.register_forward_hook(hook_fn)
     return activations
 
-def generate_grad_cam(model, input_image, class_index, activations, device):
-    # Remove the unsqueeze since input_image already has batch dimension
-    input_image = input_image.to(device)
-    input_image.requires_grad = True
 
-    output = model(input_image)
-    grad_output = torch.zeros_like(output)
-    grad_output[0][class_index] = 1
+def grad_cam(model, img, class_idx, activations, device):
+    img = img.to(device)
+    img.requires_grad = True
+
+    out = model(img)
+    grad_target = torch.zeros_like(out)
+    grad_target[0, class_idx] = 1
 
     model.zero_grad()
-    output.backward(grad_output, retain_graph=True)
-    gradients = input_image.grad
-    feature_map = activations['last_conv']
+    out.backward(grad_target)
 
-    gradients_resized = F.interpolate(gradients, size=(feature_map.shape[2], feature_map.shape[3]), 
-                                    mode='bilinear', align_corners=False)
-    pooled_gradients = torch.mean(gradients_resized, dim=1, keepdim=True)
-    pooled_gradients = pooled_gradients.expand_as(feature_map)
-    weighted_activations = pooled_gradients * feature_map
-    grad_cam_map = torch.sum(weighted_activations, dim=1).squeeze()
+    fmap = activations["value"]
+    grads = img.grad
 
-    grad_cam_map = grad_cam_map.cpu().detach().numpy()
-    grad_cam_map = np.maximum(grad_cam_map, 0)
-    grad_cam_map = cv2.resize(grad_cam_map, (input_image.size(3), input_image.size(2)))
-    grad_cam_map -= np.min(grad_cam_map)
-    grad_cam_map /= np.max(grad_cam_map)
+    weights = grads.mean(dim=(2, 3), keepdim=True)
+    cam = (weights * fmap).sum(dim=1).squeeze()
 
-    return grad_cam_map
+    cam = cam.cpu().numpy()
+    cam = np.maximum(cam, 0)
+    cam /= cam.max() + 1e-6
+    cam = cv2.resize(cam, (224, 224))
+    return cam
 
-def show_grad_cam(grad_cam_map, input_image, class_name, colormap=cv2.COLORMAP_JET):
-    img = input_image.squeeze().cpu().detach().numpy()
-    img = np.transpose(img, (1, 2, 0))
-    img = np.uint8(255 * img)
 
-    grad_cam_map_resized = cv2.resize(grad_cam_map, (img.shape[1], img.shape[0]))
-    grad_cam_map_resized = np.maximum(grad_cam_map_resized, 0)
-    grad_cam_map_resized -= np.min(grad_cam_map_resized)
-    grad_cam_map_resized /= np.max(grad_cam_map_resized)
+# =====================================================================
+# TRAIN / VAL LOOPS
+# =====================================================================
 
-    heatmap = cv2.applyColorMap(np.uint8(255 * grad_cam_map_resized), colormap)
-    superimposed_img = cv2.addWeighted(heatmap, 0.4, img, 0.6, 0)
+def train_epoch(model, loader, criterion, optimizer, device, scaler):
+    model.train()
+    total_loss = 0
+    preds, labels = [], []
 
-    plt.imshow(superimposed_img)
-    plt.title(f'Grad-CAM: {class_name}')
-    plt.axis('off')
-    plt.show()
-    wandb.log({"Grad-CAM": wandb.Image(superimposed_img)})
+    for imgs, lbls in loader:
+        imgs, lbls = imgs.to(device), lbls.to(device)
+
+        optimizer.zero_grad()
+
+        with torch.cuda.amp.autocast():
+            out = model(imgs)
+            loss = criterion(out, lbls)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        total_loss += loss.item()
+        preds.extend(out.argmax(1).cpu().numpy())
+        labels.extend(lbls.cpu().numpy())
+
+    acc = accuracy_score(labels, preds)
+    return total_loss / len(loader), acc
+
+
+def val_epoch(model, loader, criterion, device):
+    model.eval()
+    total_loss = 0
+    preds, labels, probs = [], [], []
+
+    with torch.no_grad():
+        for imgs, lbls in loader:
+            imgs, lbls = imgs.to(device), lbls.to(device)
+            out = model(imgs)
+
+            loss = criterion(out, lbls)
+            total_loss += loss.item()
+
+            preds.extend(out.argmax(1).cpu().numpy())
+            probs.extend(torch.softmax(out, dim=1).cpu().numpy())
+            labels.extend(lbls.cpu().numpy())
+
+    return (
+        total_loss / len(loader),
+        accuracy_score(labels, preds),
+        np.array(preds),
+        np.array(labels),
+        np.array(probs)
+    )
+
+
+# =====================================================================
+# PLOTS
+# =====================================================================
+
+def plot_confusion(cm, class_names):
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names)
+    plt.title("Confusion Matrix")
+    plt.tight_layout()
+    return plt
+
+
+def plot_roc(labels, probs, class_names):
+    plt.figure(figsize=(12, 10))
+    for i, name in enumerate(class_names):
+        y_true = (labels == i).astype(int)
+        fpr, tpr, _ = roc_curve(y_true, probs[:, i])
+        auc_score = auc(fpr, tpr)
+        plt.plot(fpr, tpr, label=f"{name} (AUC={auc_score:.2f})")
+
+    plt.plot([0, 1], [0, 1], "k--")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curves")
+    plt.legend()
+    plt.tight_layout()
+    return plt
+
+
+def side_by_side(original_img, gradcam_img):
+    """Put original image and CAM side-by-side."""
+    original_img = (original_img.squeeze().permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+    gradcam_img = cv2.cvtColor(gradcam_img, cv2.COLOR_BGR2RGB)
+
+    orig_resized = cv2.resize(original_img, (224, 224))
+    cam_resized = cv2.resize(gradcam_img, (224, 224))
+
+    combined = np.hstack([orig_resized, cam_resized])
+    return combined
+
+
+def grid_all_classes(class_images_dict):
+    """Grid visual: todas las GradCAM de un fold en una sola imagen."""
+    imgs = list(class_images_dict.values())
+    imgs_resized = [cv2.resize(img, (224, 224)) for img in imgs]
+    return np.hstack(imgs_resized)
+
+
+def prediction_caption(cls_true, cls_pred, confidence):
+    return (
+        f"True Class: {cls_true} | "
+        f"Predicted: {cls_pred} | "
+        f"Confidence: {confidence:.2f}"
+    )
+
+
+# =====================================================================
+# MAIN
+# =====================================================================
 
 def main():
     args = parse_args()
-    
-    
-    
-    # Log configuration parameters
-   
-    
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Get class names from directory structure
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    wandb.init(project=args.project, config=vars(args))
+
     class_names = get_class_names(args.dataset_dir)
-    num_classes = len(class_names)
-    
-    # Get transforms
-    train_transform, test_transform = get_transforms()
-    
-    # Setup dataset paths - support both 'Training/Testing' and 'train/test' conventions
-    # Also support when dataset_dir points directly to a train folder
-    base_dir = args.dataset_dir
-    
-    # Check if dataset_dir contains class folders directly (e.g., /content/dataset/train)
-    direct_class_folders = [d for d in os.listdir(base_dir) 
-                           if os.path.isdir(os.path.join(base_dir, d))]
-    excluded_folders = ['Training', 'train', 'Testing', 'test']
-    valid_class_folders = [d for d in direct_class_folders if d not in excluded_folders]
-    
-    if valid_class_folders:
-        # dataset_dir points directly to train folder, class folders are directly inside
-        train_dir = base_dir
-        # Look for test folder in parent directory
-        parent_dir = os.path.dirname(base_dir)
-        test_folder = 'Testing' if os.path.exists(os.path.join(parent_dir, 'Testing')) else 'test'
-        test_dir = os.path.join(parent_dir, test_folder)
-    else:
-        # dataset_dir points to parent directory with nested structure
-        # Determine folder naming convention
-        train_folder = 'Training' if os.path.exists(os.path.join(base_dir, 'Training')) else 'train'
-        test_folder = 'Testing' if os.path.exists(os.path.join(base_dir, 'Testing')) else 'test'
-        
-        train_dir = os.path.join(base_dir, train_folder)
-        test_dir = os.path.join(base_dir, test_folder)
-    
-    # Create datasets using class names
-    train_dataset = CustomDataset(
-        base_dir=train_dir,
-        class_names=class_names,
-        transform=train_transform
+    train_tf, test_tf = get_transforms()
+
+    full_dataset = CustomDataset(args.dataset_dir, class_names, train_tf)
+    labels_arr = np.array(full_dataset.labels)
+
+    loader_args = dict(
+        batch_size=args.batch,
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True
     )
-    
-    test_dataset = CustomDataset(
-        base_dir=test_dir,
-        class_names=class_names,
-        transform=test_transform
-    )
-    
-    test_loader = DataLoader(test_dataset, batch_size=args.batch, shuffle=False)
-    
-    # Initialize k-fold cross validation
-    if args.use_stratified:
-        kfold = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=42)
-        # Get labels for stratification
-        all_labels = [label for _, label in train_dataset]
-        # Training loop
-        for fold, (train_idx, val_idx) in enumerate(kfold.split(range(len(train_dataset)), all_labels)):
-            print(f'FOLD {fold + 1}')
-            print('--------------------------------')
-            
-            # Initialize wandb for this fold
-            wandb.init(project=args.project_name)
+
+    kfold = StratifiedKFold(n_splits=args.k_folds, shuffle=True, random_state=42)
+
+    # Cache ONE image per class for GradCAM
+    sample_images = {}
+    for img, lbl in full_dataset:
+        if lbl not in sample_images:
+            sample_images[lbl] = img.unsqueeze(0)
+        if len(sample_images) == len(class_names):
+            break
+
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(labels_arr, labels_arr)):
+        print(f"\n========== FOLD {fold+1}/{args.k_folds} ==========")
+
+        train_ds = torch.utils.data.Subset(full_dataset, train_idx)
+        val_ds = torch.utils.data.Subset(full_dataset, val_idx)
+
+        train_loader = DataLoader(train_ds, shuffle=True, **loader_args)
+        val_loader = DataLoader(val_ds, shuffle=False, **loader_args)
+
+        # Model
+        model = timm.create_model(args.model, pretrained=True, num_classes=len(class_names))
+        model.to(device)
+
+        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        criterion = nn.CrossEntropyLoss()
+        scaler = torch.cuda.amp.GradScaler()
+
+        activations = register_last_conv(model)
+
+        best_acc = 0
+        best_state = None
+
+        for epoch in range(args.epochs):
+            tr_loss, tr_acc = train_epoch(model, train_loader, criterion, optimizer, device, scaler)
+            val_loss, val_acc, val_preds, val_labels, val_probs = val_epoch(model, val_loader, criterion, device)
+
+            print(f"[Fold {fold+1}] Epoch {epoch+1}/{args.epochs} | "
+                  f"Train Acc {tr_acc:.4f} | Val Acc {val_acc:.4f}")
+
             wandb.log({
-                "dataset_dir": args.dataset_dir,
-                "model": args.model,
-                "batch_size": args.batch,
-                "learning_rate": args.lr,
-                "epochs": args.epochs,
-                "dataset_ratio": args.dataset_ratio,
-                "k_folds": args.k_folds,
                 "fold": fold + 1,
-                "use_stratified": args.use_stratified
+                "epoch": epoch + 1,
+                "train_acc": tr_acc,
+                "train_loss": tr_loss,
+                "val_acc": val_acc,
+                "val_loss": val_loss,
             })
-            
-            # Create data loaders for this fold
-            train_subsampler = torch.utils.data.SubsetRandomSampler(train_idx)
-            val_subsampler = torch.utils.data.SubsetRandomSampler(val_idx)
-            
-            train_loader = DataLoader(
-                train_dataset, 
-                batch_size=args.batch,
-                sampler=train_subsampler
-            )
-            
-            val_loader = DataLoader(
-                train_dataset,
-                batch_size=args.batch,
-                sampler=val_subsampler
-            )
-            
-            # Initialize model
-            model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
-            model = model.to(device)
-            
-            # Initialize optimizer, scheduler and criterion
-            optimizer = optim.Adam(model.parameters(), lr=args.lr)
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
-            criterion = nn.CrossEntropyLoss()
-            
-            # Training loop
-            best_val_acc = 0.0
-            best_model_state = None
-            best_epoch = 0
-            best_val_metrics = {}
-            for epoch in range(args.epochs):
-                # Training phase
-                train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
-                    model, train_loader, criterion, optimizer, device
-                )
-                
-                # Validation phase
-                val_loss, val_acc, val_precision, val_recall, val_f1, val_mcc = validate(
-                    model, val_loader, criterion, device
-                )
-                
-                # Update learning rate
-                scheduler.step(val_loss)
-                
-                # Log metrics
-                wandb.log({
-                    'Fold': fold + 1,
-                    'Epoch': epoch + 1,
-                    'Train Loss': train_loss,
-                    'Train Accuracy': train_acc,
-                    'Train Precision': train_precision,
-                    'Train Recall': train_recall,
-                    'Train F1 Score': train_f1,
-                    'Train MCC': train_mcc,
-                    'Val Loss': val_loss,
-                    'Val Accuracy': val_acc,
-                    'Val Precision': val_precision,
-                    'Val Recall': val_recall,
-                    'Val F1 Score': val_f1,
-                    'Val MCC': val_mcc,
-                    'Learning Rate': optimizer.param_groups[0]['lr']
-                })
-                
-                # Print training results
-                print(f"Fold [{fold + 1}], Epoch [{epoch + 1}/{args.epochs}]")
-                print(f"Train - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}, "
-                      f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
-                      f"F1 Score: {train_f1:.4f}, MCC: {train_mcc:.4f}")
-                print(f"Val - Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}, "
-                      f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, "
-                      f"F1 Score: {val_f1:.4f}, MCC: {val_mcc:.4f}")
-                print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
-                print('--------------------------------')
-                
-                # Track best model state in memory
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    best_epoch = epoch
-                    best_model_state = model.state_dict().copy()
-                    best_val_metrics = {
-                        'val_acc': val_acc,
-                        'val_f1': val_f1,
-                        'val_mcc': val_mcc
-                    }
-                    print(f"New best model found (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
-            
-            # Save best model to wandb after final epoch
-            if best_model_state is not None:
-                best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pt'
-                torch.save({
-                    'epoch': best_epoch,
-                    'model_state_dict': best_model_state,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_acc': best_val_metrics['val_acc'],
-                    'val_f1': best_val_metrics['val_f1'],
-                    'val_mcc': best_val_metrics['val_mcc']
-                }, best_model_path)
-                wandb.save(best_model_path)
-                print(f"Best model saved to wandb: {best_model_path} (Val Acc: {best_val_metrics['val_acc']:.4f}, Epoch: {best_epoch + 1})")
-                # Load best model for testing
-                model.load_state_dict(best_model_state)
-                checkpoint = {
-                    'epoch': best_epoch,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_acc': best_val_metrics['val_acc'],
-                    'val_f1': best_val_metrics['val_f1'],
-                    'val_mcc': best_val_metrics['val_mcc']
-                }
-            else:
-                print(f"Warning: No best model found for fold {fold + 1}")
-                checkpoint = None
-            
-            # === Testing Phase ===
-            # Use best model for testing (already loaded above)
-            if checkpoint is not None:
-                print(f"\nUsing best model for testing (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
-            else:
-                print(f"\nWarning: Using final epoch model for testing.")
-            
-            print(f"\nTesting on Fold {fold + 1}...")
+
+            if val_acc > best_acc:
+                best_acc = val_acc
+                best_state = model.state_dict()
+
+        # -----------------------------------------------------
+        # FINAL GRAPHS PER FOLD
+        # -----------------------------------------------------
+
+        print(f"Generating graphs for Fold {fold+1}...")
+
+        # Confusion matrix
+        cm = confusion_matrix(val_labels, val_preds)
+        cm_fig = plot_confusion(cm, class_names)
+        wandb.log({f"Confusion_Matrix_Fold_{fold+1}": wandb.Image(cm_fig)})
+        plt.close()
+
+        # ROC curves
+        roc_fig = plot_roc(val_labels, val_probs, class_names)
+        wandb.log({f"ROC_Fold_{fold+1}": wandb.Image(roc_fig)})
+        plt.close()
+
+        # =============================
+        # GRAD-CAM / SIDE-BY-SIDE / GRID
+        # =============================
+
+        gradcam_images = {}
+
+        for cls in range(len(class_names)):
+            original = sample_images[cls]
+            cam = grad_cam(model, original.clone(), cls, activations, device)
+            heat = cv2.applyColorMap((cam * 255).astype(np.uint8), cv2.COLORMAP_JET)
+
+            # ---- SIDE BY SIDE (original + gradcam) ----
+            combined = side_by_side(original.cpu(), heat)
+
+            # ---- predicted class and confidence ----
             model.eval()
-            all_preds = []
-            all_labels = []
-            
             with torch.no_grad():
-                for images, labels in test_loader:
-                    images, labels = images.to(device), labels.to(device)
-                    outputs = model(images)
-                    _, preds = torch.max(outputs, 1)
-                    all_preds.extend(preds.cpu().numpy())
-                    all_labels.extend(labels.cpu().numpy())
-            
-            # Calculate test metrics
-            test_acc = accuracy_score(all_labels, all_preds)
-            test_precision = precision_score(all_labels, all_preds, average='weighted')
-            test_recall = recall_score(all_labels, all_preds, average='weighted')
-            test_f1 = f1_score(all_labels, all_preds, average='weighted')
-            test_mcc = matthews_corrcoef(all_labels, all_preds)
-            
-            # Log test metrics
-            wandb.log({
-                'Test Accuracy': test_acc,
-                'Test Precision': test_precision,
-                'Test Recall': test_recall,
-                'Test F1 Score': test_f1,
-                'Test MCC': test_mcc
-            })
-            
-            # Generate confusion matrix with class names
-            conf_matrix = confusion_matrix(all_labels, all_preds)
-            plt.figure(figsize=(15, 12))
-            sns.set(font_scale=1.5)
-            
-            sns.heatmap(conf_matrix, 
-                        annot=True, 
-                        fmt='d', 
-                        cmap='Blues', 
-                        annot_kws={"size": 20},
-                        xticklabels=class_names,
-                        yticklabels=class_names)
-            
-            plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
-            plt.ylabel('True Label', fontsize=20)
-            plt.xlabel('Predicted Label', fontsize=20)
-            plt.xticks(fontsize=16, rotation=45)
-            plt.yticks(fontsize=16)
-            plt.tight_layout()
-            wandb.log({"Confusion Matrix": wandb.Image(plt)})
-            plt.close()
-            
-            # Generate ROC curves
-            plt.figure(figsize=(12, 10))
-            sns.set(font_scale=1.5)
+                out = model(original.to(device))
+                probs = torch.softmax(out, dim=1).cpu().numpy()[0]
+                pred_idx = np.argmax(probs)
+                conf = probs[pred_idx]
 
-            # Get prediction probabilities
-            all_probs = []
-            with torch.no_grad():
-                for images, _ in test_loader:
-                    images = images.to(device)
-                    outputs = model(images)
-                    probs = torch.softmax(outputs, dim=1)
-                    all_probs.extend(probs.cpu().numpy())
-
-            all_probs = np.array(all_probs)
-            all_labels = np.array(all_labels)
-
-            # Plot ROC curve for each class
-            colors = ['blue', 'red', 'green', 'purple']
-
-            for i, class_name in enumerate(class_names):
-                # Convert to binary classification for each class
-                y_true_binary = (all_labels == i).astype(int)
-                y_score = all_probs[:, i]
-                
-                # Calculate ROC curve
-                fpr, tpr, _ = roc_curve(y_true_binary, y_score)
-                roc_auc = auc(fpr, tpr)
-                
-                # Plot ROC curve
-                plt.plot(fpr, tpr, color=colors[i], lw=2,
-                         label=f'{class_name} (AUC = {roc_auc:.2f})')
-
-            # Plot diagonal line
-            plt.plot([0, 1], [0, 1], 'k--', lw=2)
-
-            # Customize plot
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate', fontsize=20)
-            plt.ylabel('True Positive Rate', fontsize=20)
-            plt.title(f'ROC Curves - Fold {fold + 1}', fontsize=24)
-            plt.legend(loc="lower right", fontsize=16)
-            plt.grid(True, alpha=0.3)
-            plt.tick_params(axis='both', which='major', labelsize=16)
-
-            # Save and log to wandb
-            wandb.log({"ROC Curves": wandb.Image(plt)})
-            plt.close()
-            
-            # Generate Grad-CAM visualizations
-            print(f"Generating Grad-CAM visualizations for Fold {fold + 1}...")
-            images_per_class = {}
-            
-            # Get one image per class
-            for images, labels in test_loader:
-                for img, lbl in zip(images, labels):
-                    cls = lbl.item()
-                    if cls not in images_per_class:
-                        images_per_class[cls] = img.unsqueeze(0).to(device)
-                    if len(images_per_class) == len(class_names):
-                        break
-                if len(images_per_class) == len(class_names):
-                    break
-            
-            # Generate Grad-CAM for each class
-            for cls_idx in range(len(class_names)):
-                if cls_idx in images_per_class:
-                    input_image = images_per_class[cls_idx]
-                    activations = register_hooks(model)
-                    grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
-                    show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
-            
-            # Save test results model with test metrics (using best model)
-            test_results_path = f'test_results_{args.model}_fold_{fold + 1}.pt'
-            best_epoch = checkpoint['epoch'] if checkpoint is not None else args.epochs - 1
-            torch.save({
-                'epoch': best_epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': checkpoint['optimizer_state_dict'] if checkpoint is not None else None,
-                'val_acc': checkpoint['val_acc'] if checkpoint is not None else None,
-                'val_f1': checkpoint['val_f1'] if checkpoint is not None else None,
-                'val_mcc': checkpoint['val_mcc'] if checkpoint is not None else None,
-                'test_acc': test_acc,
-                'test_f1': test_f1,
-                'test_mcc': test_mcc,
-                'class_names': class_names
-            }, test_results_path)
-            wandb.save(test_results_path)
-            print(f"Test results model saved to wandb: {test_results_path}")
-            
-            # Finish wandb run for this fold
-            wandb.finish()
-    else:
-        kfold = KFold(n_splits=args.k_folds, shuffle=True, random_state=42)
-        # Training loop
-        for fold, (train_idx, val_idx) in enumerate(kfold.split(range(len(train_dataset)))):
-            print(f'FOLD {fold + 1}')
-            print('--------------------------------')
-            
-            # Initialize wandb for this fold
-            wandb.init(project=args.project_name)
-            wandb.log({
-                "dataset_dir": args.dataset_dir,
-                "model": args.model,
-                "batch_size": args.batch,
-                "learning_rate": args.lr,
-                "epochs": args.epochs,
-                "dataset_ratio": args.dataset_ratio,
-                "k_folds": args.k_folds,
-                "fold": fold + 1,
-                "use_stratified": args.use_stratified
-            })
-            
-            # Create data loaders for this fold
-            train_subsampler = torch.utils.data.SubsetRandomSampler(train_idx)
-            val_subsampler = torch.utils.data.SubsetRandomSampler(val_idx)
-            
-            train_loader = DataLoader(
-                train_dataset, 
-                batch_size=args.batch,
-                sampler=train_subsampler
+            caption = prediction_caption(
+                class_names[cls],
+                class_names[pred_idx],
+                conf
             )
-            
-            val_loader = DataLoader(
-                train_dataset,
-                batch_size=args.batch,
-                sampler=val_subsampler
-            )
-            
-            # Initialize model
-            model = timm.create_model(args.model, pretrained=True, num_classes=num_classes)
-            model = model.to(device)
-            
-            # Initialize optimizer, scheduler and criterion
-            optimizer = optim.Adam(model.parameters(), lr=args.lr)
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
-            criterion = nn.CrossEntropyLoss()
-            
-            # Training loop
-            best_val_acc = 0.0
-            best_model_state = None
-            best_epoch = 0
-            best_val_metrics = {}
-            for epoch in range(args.epochs):
-                # Training phase
-                train_loss, train_acc, train_precision, train_recall, train_f1, train_mcc = train_epoch(
-                    model, train_loader, criterion, optimizer, device
-                )
-                
-                # Validation phase
-                val_loss, val_acc, val_precision, val_recall, val_f1, val_mcc = validate(
-                    model, val_loader, criterion, device
-                )
-                
-                # Update learning rate
-                scheduler.step(val_loss)
-                
-                # Log metrics
-                wandb.log({
-                    'Fold': fold + 1,
-                    'Epoch': epoch + 1,
-                    'Train Loss': train_loss,
-                    'Train Accuracy': train_acc,
-                    'Train Precision': train_precision,
-                    'Train Recall': train_recall,
-                    'Train F1 Score': train_f1,
-                    'Train MCC': train_mcc,
-                    'Val Loss': val_loss,
-                    'Val Accuracy': val_acc,
-                    'Val Precision': val_precision,
-                    'Val Recall': val_recall,
-                    'Val F1 Score': val_f1,
-                    'Val MCC': val_mcc,
-                    'Learning Rate': optimizer.param_groups[0]['lr']
-                })
-                
-                # Print training results
-                print(f"Fold [{fold + 1}], Epoch [{epoch + 1}/{args.epochs}]")
-                print(f"Train - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}, "
-                      f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
-                      f"F1 Score: {train_f1:.4f}, MCC: {train_mcc:.4f}")
-                print(f"Val - Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}, "
-                      f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, "
-                      f"F1 Score: {val_f1:.4f}, MCC: {val_mcc:.4f}")
-                print(f"Learning Rate: {optimizer.param_groups[0]['lr']}")
-                print('--------------------------------')
-                
-                # Track best model state in memory
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    best_epoch = epoch
-                    best_model_state = model.state_dict().copy()
-                    best_val_metrics = {
-                        'val_acc': val_acc,
-                        'val_f1': val_f1,
-                        'val_mcc': val_mcc
-                    }
-                    print(f"New best model found (Val Acc: {val_acc:.4f}, Epoch: {epoch + 1})")
-            
-            # Save best model to wandb after final epoch
-            if best_model_state is not None:
-                best_model_path = f'best_model_{args.model}_fold_{fold + 1}.pth'
-                torch.save({
-                    'epoch': best_epoch,
-                    'model_state_dict': best_model_state,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_acc': best_val_metrics['val_acc'],
-                    'val_f1': best_val_metrics['val_f1'],
-                    'val_mcc': best_val_metrics['val_mcc']
-                }, best_model_path)
-                wandb.save(best_model_path)
-                print(f"Best model saved to wandb: {best_model_path} (Val Acc: {best_val_metrics['val_acc']:.4f}, Epoch: {best_epoch + 1})")
-                # Load best model for testing
-                model.load_state_dict(best_model_state)
-                checkpoint = {
-                    'epoch': best_epoch,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_acc': best_val_metrics['val_acc'],
-                    'val_f1': best_val_metrics['val_f1'],
-                    'val_mcc': best_val_metrics['val_mcc']
-                }
-            else:
-                print(f"Warning: No best model found for fold {fold + 1}")
-                checkpoint = None
-            
-            # === Testing Phase ===
-            # Use best model for testing (already loaded above)
-            if checkpoint is not None:
-                print(f"\nUsing best model for testing (Val Acc: {checkpoint['val_acc']:.4f}, Epoch: {checkpoint['epoch'] + 1})")
-            else:
-                print(f"\nWarning: Using final epoch model for testing.")
-            
-            print(f"\nTesting on Fold {fold + 1}...")
-            model.eval()
-            all_preds = []
-            all_labels = []
-            
-            with torch.no_grad():
-                for images, labels in test_loader:
-                    images, labels = images.to(device), labels.to(device)
-                    outputs = model(images)
-                    _, preds = torch.max(outputs, 1)
-                    all_preds.extend(preds.cpu().numpy())
-                    all_labels.extend(labels.cpu().numpy())
-            
-            # Calculate test metrics
-            test_acc = accuracy_score(all_labels, all_preds)
-            test_precision = precision_score(all_labels, all_preds, average='weighted')
-            test_recall = recall_score(all_labels, all_preds, average='weighted')
-            test_f1 = f1_score(all_labels, all_preds, average='weighted')
-            test_mcc = matthews_corrcoef(all_labels, all_preds)
-            
-            # Log test metrics
+
             wandb.log({
-                'Test Accuracy': test_acc,
-                'Test Precision': test_precision,
-                'Test Recall': test_recall,
-                'Test F1 Score': test_f1,
-                'Test MCC': test_mcc
+                f"GradCAM_Fold_{fold+1}_Class_{class_names[cls]}":
+                    wandb.Image(combined, caption=caption)
             })
-            
-            # Generate confusion matrix with class names
-            conf_matrix = confusion_matrix(all_labels, all_preds)
-            plt.figure(figsize=(15, 12))
-            sns.set(font_scale=1.5)
-            
-            sns.heatmap(conf_matrix, 
-                        annot=True, 
-                        fmt='d', 
-                        cmap='Blues', 
-                        annot_kws={"size": 20},
-                        xticklabels=class_names,
-                        yticklabels=class_names)
-            
-            plt.title(f'Confusion Matrix - Fold {fold + 1}', fontsize=24)
-            plt.ylabel('True Label', fontsize=20)
-            plt.xlabel('Predicted Label', fontsize=20)
-            plt.xticks(fontsize=16, rotation=45)
-            plt.yticks(fontsize=16)
-            plt.tight_layout()
-            wandb.log({"Confusion Matrix": wandb.Image(plt)})
-            plt.close()
-            
-            # Generate ROC curves
-            plt.figure(figsize=(12, 10))
-            sns.set(font_scale=1.5)
 
-            # Get prediction probabilities
-            all_probs = []
-            with torch.no_grad():
-                for images, _ in test_loader:
-                    images = images.to(device)
-                    outputs = model(images)
-                    probs = torch.softmax(outputs, dim=1)
-                    all_probs.extend(probs.cpu().numpy())
+            gradcam_images[class_names[cls]] = combined
 
-            all_probs = np.array(all_probs)
-            all_labels = np.array(all_labels)
+        # ---- GRID VISUAL: todas las clases en una sola imagen ----
+        grid_img = grid_all_classes(gradcam_images)
 
-            # Plot ROC curve for each class
-            colors = ['blue', 'red', 'green', 'purple']
+        wandb.log({
+            f"GradCAM_GRID_Fold_{fold+1}":
+                wandb.Image(grid_img, caption="All Classes GradCAM Grid")
+        })
 
-            for i, class_name in enumerate(class_names):
-                # Convert to binary classification for each class
-                y_true_binary = (all_labels == i).astype(int)
-                y_score = all_probs[:, i]
-                
-                # Calculate ROC curve
-                fpr, tpr, _ = roc_curve(y_true_binary, y_score)
-                roc_auc = auc(fpr, tpr)
-                
-                # Plot ROC curve
-                plt.plot(fpr, tpr, color=colors[i], lw=2,
-                         label=f'{class_name} (AUC = {roc_auc:.2f})')
+        torch.save(best_state, f"best_fold_{fold+1}.pt")
+        wandb.save(f"best_fold_{fold+1}.pt")
 
-            # Plot diagonal line
-            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    wandb.finish()
 
-            # Customize plot
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate', fontsize=20)
-            plt.ylabel('True Positive Rate', fontsize=20)
-            plt.title(f'ROC Curves - Fold {fold + 1}', fontsize=24)
-            plt.legend(loc="lower right", fontsize=16)
-            plt.grid(True, alpha=0.3)
-            plt.tick_params(axis='both', which='major', labelsize=16)
 
-            # Save and log to wandb
-            wandb.log({"ROC Curves": wandb.Image(plt)})
-            plt.close()
-            
-            # Generate Grad-CAM visualizations
-            print(f"Generating Grad-CAM visualizations for Fold {fold + 1}...")
-            images_per_class = {}
-            
-            # Get one image per class
-            for images, labels in test_loader:
-                for img, lbl in zip(images, labels):
-                    cls = lbl.item()
-                    if cls not in images_per_class:
-                        images_per_class[cls] = img.unsqueeze(0).to(device)
-                    if len(images_per_class) == len(class_names):
-                        break
-                if len(images_per_class) == len(class_names):
-                    break
-            
-            # Generate Grad-CAM for each class
-            for cls_idx in range(len(class_names)):
-                if cls_idx in images_per_class:
-                    input_image = images_per_class[cls_idx]
-                    activations = register_hooks(model)
-                    grad_cam_map = generate_grad_cam(model, input_image, cls_idx, activations, device)
-                    show_grad_cam(grad_cam_map, input_image.cpu(), class_names[cls_idx])
-            
-            # Save test results model with test metrics (using best model)
-            test_results_path = f'test_results_{args.model}_fold_{fold + 1}.pth'
-            best_epoch = checkpoint['epoch'] if checkpoint is not None else args.epochs - 1
-            torch.save({
-                'epoch': best_epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': checkpoint['optimizer_state_dict'] if checkpoint is not None else None,
-                'val_acc': checkpoint['val_acc'] if checkpoint is not None else None,
-                'val_f1': checkpoint['val_f1'] if checkpoint is not None else None,
-                'val_mcc': checkpoint['val_mcc'] if checkpoint is not None else None,
-                'test_acc': test_acc,
-                'test_f1': test_f1,
-                'test_mcc': test_mcc,
-                'class_names': class_names
-            }, test_results_path)
-            wandb.save(test_results_path)
-            print(f"Test results model saved to wandb: {test_results_path}")
-            
-            # Finish wandb run for this fold
-            wandb.finish()
-
-if __name__ == '__main__':
-    main() 
+if __name__ == "__main__":
+    main()
