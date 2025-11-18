@@ -37,7 +37,10 @@ def parse_args():
                         help="Path to dataset/test/")
     parser.add_argument("--model", type=str, default="efficientnet_b0")
     parser.add_argument("--batch", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--initial_lr", type=float, default=1e-3,
+                        help="Initial learning rate")
+    parser.add_argument("--final_lr", type=float, default=1e-6,
+                        help="Final/minimum learning rate for ReduceLROnPlateau")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--k_folds", type=int, default=3)
     parser.add_argument("--dataset_ratio", type=float, default=1.0,
@@ -368,8 +371,6 @@ def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    wandb.init(project=args.project_name, config=vars(args))
-
     class_names = get_class_names(args.train_dir)
     train_tf, test_tf = get_transforms()
 
@@ -407,6 +408,13 @@ def main():
 
     for fold, (train_idx, val_idx) in enumerate(kfold.split(labels_arr, labels_arr)):
         print(f"\n========== FOLD {fold+1}/{args.k_folds} ==========")
+        
+        # Initialize wandb for this fold
+        wandb.init(
+            project=args.project_name,
+            name=f"fold_{fold+1}",
+            config={**vars(args), "fold": fold + 1}
+        )
 
         train_ds = torch.utils.data.Subset(train_dataset, train_idx)
         val_ds = torch.utils.data.Subset(train_dataset, val_idx)
@@ -419,11 +427,21 @@ def main():
         model = timm.create_model(args.model, pretrained=True, num_classes=len(class_names))
         model.to(device)
 
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        initial_lr = args.initial_lr
+        optimizer = optim.Adam(model.parameters(), lr=initial_lr)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=3, min_lr=args.final_lr, verbose=True
+        )
         criterion = nn.CrossEntropyLoss()
         scaler = torch.amp.GradScaler('cuda')
 
         activations = register_last_conv(model)
+
+        # Log initial_lr and final_lr to wandb at the start of each fold
+        wandb.log({
+            "initial_lr": initial_lr,
+            "final_lr": args.final_lr,
+        })
 
         best_acc = 0
         best_state = None
@@ -434,9 +452,15 @@ def main():
         for epoch in range(args.epochs):
             tr_loss, tr_acc = train_epoch(model, train_loader, criterion, optimizer, device, scaler)
             val_loss, val_acc, _, _, _ = val_epoch(model, val_loader, criterion, device)
+            
+            # Update learning rate based on validation loss
+            scheduler.step(val_loss)
+            
+            # Get current learning rate
+            current_lr = optimizer.param_groups[0]['lr']
 
             print(f"[Fold {fold+1}] Epoch {epoch+1}/{args.epochs} | "
-                  f"Train Acc {tr_acc:.4f} | Val Acc {val_acc:.4f}")
+                  f"Train Acc {tr_acc:.4f} | Val Acc {val_acc:.4f} | LR {current_lr:.6f}")
 
             wandb.log({
                 "fold": fold + 1,
@@ -445,16 +469,26 @@ def main():
                 "train_loss": tr_loss,
                 "val_acc": val_acc,
                 "val_loss": val_loss,
+                "learning_rate": current_lr,
             })
 
             if val_acc > best_acc:
                 best_acc = val_acc
                 best_state = model.state_dict()
 
+        # Get final learning rate after training
+        final_lr_actual = optimizer.param_groups[0]['lr']
+        
+        # Log final learning rate to wandb
+        wandb.log({
+            "final_lr_actual": final_lr_actual,
+        })
+
         # =============================================
         # TEST FINAL REAL
         # =============================================
         print(f"Evaluating TEST SET for Fold {fold+1}...")
+        print(f"Initial LR: {initial_lr:.6f} | Final LR: {final_lr_actual:.6f}")
 
         model.load_state_dict(best_state)
 
@@ -561,8 +595,25 @@ def main():
         # save best model
         torch.save(best_state, f"best_fold_{fold+1}.pt")
         wandb.save(f"best_fold_{fold+1}.pt")
-
-    wandb.finish()
+        
+        # Log summary metrics for this fold (all key metrics in summary for easy access)
+        wandb.summary.update({
+            "best_val_acc": best_acc,
+            "test_acc": test_acc,
+            "test_loss": test_loss,
+            "test_precision": test_precision,
+            "test_recall": test_recall,
+            "test_f1": test_f1,
+            "test_mcc": test_mcc,
+            "initial_lr": initial_lr,
+            "final_lr_actual": final_lr_actual,
+            "fold": fold + 1,
+        })
+        
+        # Finish wandb run for this fold to ensure data is uploaded
+        wandb.finish()
+        
+        print(f"Fold {fold+1} completed. All results uploaded to wandb.")
 
 
 if __name__ == "__main__":
