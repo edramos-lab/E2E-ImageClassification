@@ -42,7 +42,8 @@ def parse_args():
     parser.add_argument("--k_folds", type=int, default=3)
     parser.add_argument("--dataset_ratio", type=float, default=1.0,
                         help="Use only a percentage of TRAIN: 0.0–1.0")
-    parser.add_argument("--project", type=str, default="e2e-folds")
+    parser.add_argument("--project_name", type=str, default="e2e-folds",
+                        help="WandB project name")
     return parser.parse_args()
 
 
@@ -304,7 +305,7 @@ def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    wandb.init(project=args.project, config=vars(args))
+    wandb.init(project=args.project_name, config=vars(args))
 
     class_names = get_class_names(args.train_dir)
     train_tf, test_tf = get_transforms()
