@@ -310,6 +310,42 @@ def side_by_side(original_img, gradcam_img):
     return combined
 
 
+def overlay_heatmap(original_img, heatmap_img, alpha=0.4):
+    """
+    Overlay heatmap on original image with transparency.
+    
+    Args:
+        original_img: Tensor of shape [C, H, W] or [1, C, H, W]
+        heatmap_img: BGR heatmap image from cv2.applyColorMap
+        alpha: Transparency factor for heatmap (0.0 = fully transparent, 1.0 = fully opaque)
+    
+    Returns:
+        Combined image with heatmap overlay
+    """
+    # Convert original image to numpy and ensure it's in the right format
+    if original_img.dim() == 4:
+        original_img = original_img.squeeze(0)
+    
+    # PyTorch images are [C, H, W] in RGB format
+    original_img = original_img.permute(1, 2, 0).cpu().numpy()
+    original_img = (original_img * 255).astype(np.uint8)
+    
+    # Convert RGB to BGR for cv2 operations (cv2 uses BGR format)
+    original_img_bgr = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR)
+    
+    # Resize both to same size
+    orig_resized = cv2.resize(original_img_bgr, (224, 224))
+    heatmap_resized = cv2.resize(heatmap_img, (224, 224))
+    
+    # Overlay heatmap on original image with transparency
+    overlaid = cv2.addWeighted(orig_resized, 1 - alpha, heatmap_resized, alpha, 0)
+    
+    # Convert back to RGB for display (wandb expects RGB)
+    overlaid = cv2.cvtColor(overlaid, cv2.COLOR_BGR2RGB)
+    
+    return overlaid
+
+
 def grid_all_classes(class_images_dict):
     imgs = list(class_images_dict.values())
     imgs_resized = [cv2.resize(img, (224, 224)) for img in imgs]
@@ -499,8 +535,8 @@ def main():
             cam = grad_cam(model, original.clone(), cls, activations, device)
             heat = cv2.applyColorMap((cam * 255).astype(np.uint8), cv2.COLORMAP_JET)
 
-            # side-by-side
-            combined = side_by_side(original.cpu(), heat)
+            # overlay heatmap on original image
+            combined = overlay_heatmap(original.cpu(), heat, alpha=0.4)
 
             caption = prediction_caption(
                 class_names[cls],
