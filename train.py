@@ -37,10 +37,8 @@ def parse_args():
                         help="Path to dataset/test/")
     parser.add_argument("--model", type=str, default="efficientnet_b0")
     parser.add_argument("--batch", type=int, default=32)
-    parser.add_argument("--initial_lr", type=float, default=1e-3,
-                        help="Initial learning rate")
-    parser.add_argument("--final_lr", type=float, default=1e-6,
-                        help="Final/minimum learning rate for ReduceLROnPlateau")
+    parser.add_argument("--lr", type=float, default=1e-3,
+                        help="Learning rate")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--k_folds", type=int, default=3)
     parser.add_argument("--dataset_ratio", type=float, default=1.0,
@@ -427,20 +425,19 @@ def main():
         model = timm.create_model(args.model, pretrained=True, num_classes=len(class_names))
         model.to(device)
 
-        initial_lr = args.initial_lr
-        optimizer = optim.Adam(model.parameters(), lr=initial_lr)
+        lr = args.lr
+        optimizer = optim.Adam(model.parameters(), lr=lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=3, min_lr=args.final_lr, verbose=True
+            optimizer, mode='min', factor=0.5, patience=3, verbose=True
         )
         criterion = nn.CrossEntropyLoss()
         scaler = torch.amp.GradScaler('cuda')
 
         activations = register_last_conv(model)
 
-        # Log initial_lr and final_lr to wandb at the start of each fold
+        # Log lr to wandb at the start of each fold
         wandb.log({
-            "initial_lr": initial_lr,
-            "final_lr": args.final_lr,
+            "lr": lr,
         })
 
         best_acc = 0
@@ -476,19 +473,10 @@ def main():
                 best_acc = val_acc
                 best_state = model.state_dict()
 
-        # Get final learning rate after training
-        final_lr_actual = optimizer.param_groups[0]['lr']
-        
-        # Log final learning rate to wandb
-        wandb.log({
-            "final_lr_actual": final_lr_actual,
-        })
-
         # =============================================
         # TEST FINAL REAL
         # =============================================
         print(f"Evaluating TEST SET for Fold {fold+1}...")
-        print(f"Initial LR: {initial_lr:.6f} | Final LR: {final_lr_actual:.6f}")
 
         model.load_state_dict(best_state)
 
@@ -605,8 +593,7 @@ def main():
             "test_recall": test_recall,
             "test_f1": test_f1,
             "test_mcc": test_mcc,
-            "initial_lr": initial_lr,
-            "final_lr_actual": final_lr_actual,
+            "lr": lr,
             "fold": fold + 1,
         })
         
