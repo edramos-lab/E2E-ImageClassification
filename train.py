@@ -428,7 +428,7 @@ def main():
         lr = args.lr
         optimizer = optim.Adam(model.parameters(), lr=lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=3, verbose=True
+            optimizer, mode='min', factor=0.5, patience=3
         )
         criterion = nn.CrossEntropyLoss()
         scaler = torch.amp.GradScaler('cuda')
